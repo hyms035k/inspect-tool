@@ -111,7 +111,7 @@ if (is_plugin_active('siteguard/siteguard.php') || defined('SITEGUARD_VERSION'))
 
     if (!empty($sgPage['renamelogin_path']) && $sgPage['renamelogin_path'] !== 'wp-login.php') {
         $loginUrlChanged = true;
-        $loginUrlDetail = "SiteGuardで変更済み（/{$sgPage['renamelogin_path']}）";
+        $loginUrlDetail = "SiteGuardで変更済み";
     }
 
     // 画像認証（ログインキャプチャ）

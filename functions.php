@@ -15,9 +15,10 @@ function getCurlOptions(string $url, string $user = '', string $pass = ''): arra
         CURLOPT_HEADER => true,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS => 5,
-        CURLOPT_TIMEOUT => 6,
+        CURLOPT_TIMEOUT => 8,
         CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SiteChecker/1.0',
         CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_ENCODING => '',
     ];
     if (!empty($user) && !empty($pass)) {
         $opts[CURLOPT_USERPWD] = "{$user}:{$pass}";
@@ -133,7 +134,8 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
                 curl_exec($ch);
                 $altInfo = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_close($ch);
-                if (in_array($altInfo, [403, 404])) {
+                $siteInfo['admin_url'] = $apiData['admin_url'];
+                if (strpos($siteInfo['admin_url'], 'wp-login.php') === false && strpos($siteInfo['admin_url'], 'wp-admin') === false && in_array($altInfo, [403, 404])) {
                     $siteInfo['admin_url'] .= '.php';
                 }
             }else{
@@ -145,6 +147,19 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
 
             $results[] = ['title' => 'WordPressバージョン', 'status' => !empty($apiData['wp_is_latest']) ? 'OK' : 'NG', 'detail' => !empty($apiData['wp_is_latest']) ? "最新です（v{$apiData['wp_version']}）。" : "要更新（現在: v{$apiData['wp_version']}）。"];
             $results[] = ['title' => 'プラグインバージョン', 'status' => empty($apiData['outdated_plugins']) ? 'OK' : 'NG', 'detail' => empty($apiData['outdated_plugins']) ? 'すべて最新です。' : '要更新: ' . implode(', ', $apiData['outdated_plugins'])];
+
+            // 自動更新設定 (WP_AUTO_UPDATE_CORE) の判定
+            $autoSetting = $apiData['auto_update_setting'] ?? 'default';
+            $autoDetail = "設定値: " . var_export($autoSetting, true);
+
+            // false（手動・停止）になっていなければ OK とする例（社内ルールに合わせて調整可能）
+            $isAutoOk = ($autoSetting !== false && $autoSetting !== 'false');
+            $results[] = [
+                'title' => '自動更新設定(WP_AUTO_UPDATE_CORE)',
+                'status' => $isAutoOk ? 'OK' : 'NG',
+                'detail' => $autoDetail . ($isAutoOk ? '' : '（自動更新が停止されています）')
+            ];
+
             $results[] = ['title' => '管理者メールアドレス', 'status' => (isset($apiData['admin_email']) && str_contains($apiData['admin_email'], 'web-support@')) ? 'OK' : 'NG', 'detail' => "設定値: " . ($apiData['admin_email'] ?? '未設定')];
 
             // ログインURL変更確認
@@ -177,54 +192,137 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
 }
 
 /**
- * 5. sitemap.xml の解析とページURLリストの取得
+ * 5. sitemap.xml の再帰解析と全ページURLの取得（多階層・AIOSEO対応）
  */
 function fetchSitemapUrls(string $host, string $scheme, string $targetUrl, string $user = '', string $pass = ''): array {
-    $sitemapUrls = [];
-    $sitemapTarget = $scheme . '://' . $host . '/sitemap.xml';
+    $visitedSitemaps = [];
+    $pageUrls = [];
 
-    $chSm = curl_init();
-    curl_setopt_array($chSm, getCurlOptions($sitemapTarget, $user, $pass));
-    $smRes = curl_exec($chSm);
-    $smCode = curl_getinfo($chSm, CURLINFO_HTTP_CODE);
-    $smHeaderSize = curl_getinfo($chSm, CURLINFO_HEADER_SIZE);
-    curl_close($chSm);
+    // 探索するルートサイトマップ候補
+    $candidateSitemaps = [
+        $scheme . '://' . $host . '/sitemap.xml',
+        $scheme . '://' . $host . '/sitemap_index.xml',
+        $scheme . '://' . $host . '/wp-sitemap.xml',
+    ];
 
-    if ($smCode === 200 && $smRes !== false) {
+    // 再帰的にサイトマップ（ネスト含む）をたどる内部関数
+    $parseSitemap = function(string $sitemapUrl, int $depth = 0) use (&$parseSitemap, &$visitedSitemaps, &$pageUrls, $user, $pass) {
+        // 深さ上限（5階層）および同一URLの重複探索防止
+        if ($depth > 5 || in_array($sitemapUrl, $visitedSitemaps)) {
+            return;
+        }
+        $visitedSitemaps[] = $sitemapUrl;
+
+        $chSm = curl_init();
+        $opts = getCurlOptions($sitemapUrl, $user, $pass);
+        curl_setopt_array($chSm, $opts);
+        $smRes = curl_exec($chSm);
+        $smCode = curl_getinfo($chSm, CURLINFO_HTTP_CODE);
+        $smHeaderSize = curl_getinfo($chSm, CURLINFO_HEADER_SIZE);
+        curl_close($chSm);
+
+        if ($smCode !== 200 || $smRes === false) {
+            return;
+        }
+
         $xmlContent = substr($smRes, $smHeaderSize);
-        preg_match_all('/<loc>(https?:\/\/[^<]+)<\/loc>/i', $xmlContent, $locs);
-        if (!empty($locs[1])) {
-            foreach ($locs[1] as $loc) {
-                if (str_contains($loc, '.xml')) {
-                    $chSub = curl_init();
-                    curl_setopt_array($chSub, getCurlOptions($loc, $user, $pass));
-                    $subRes = curl_exec($chSub);
-                    $subHeaderSize = curl_getinfo($chSub, CURLINFO_HEADER_SIZE);
-                    curl_close($chSub);
-                    if ($subRes !== false) {
-                        preg_match_all('/<loc>(https?:\/\/[^<]+)<\/loc>/i', substr($subRes, $subHeaderSize), $subLocs);
-                        if (!empty($subLocs[1])) {
-                            $sitemapUrls = array_merge($sitemapUrls, $subLocs[1]);
-                        }
+        if (empty($xmlContent)) {
+            return;
+        }
+
+        // CDATA タグの除去
+        $xmlContent = preg_replace('/<!\[CDATA\[(.*?)\]\]>/s', '$1', $xmlContent);
+
+        // A. <sitemap>...</sitemap> ブロック（配下のサイトマップURL）を抽出
+        preg_match_all('/<sitemap[^>]*>(.*?)<\/sitemap>/is', $xmlContent, $sitemapBlocks);
+        $childSitemaps = [];
+        if (!empty($sitemapBlocks[1])) {
+            foreach ($sitemapBlocks[1] as $block) {
+                if (preg_match('/<loc>(.*?)<\/loc>/is', $block, $locMatch)) {
+                    $cUrl = trim(html_entity_decode($locMatch[1], ENT_QUOTES, 'UTF-8'));
+                    if (!empty($cUrl)) {
+                        $childSitemaps[] = $cUrl;
                     }
-                } else {
-                    $sitemapUrls[] = $loc;
                 }
             }
         }
+
+        // B. <url>...</url> ブロック（実際のページURL）を抽出
+        preg_match_all('/<url[^>]*>(.*?)<\/url>/is', $xmlContent, $urlBlocks);
+        $childPageUrls = [];
+        if (!empty($urlBlocks[1])) {
+            foreach ($urlBlocks[1] as $block) {
+                if (preg_match('/<loc>(.*?)<\/loc>/is', $block, $locMatch)) {
+                    $pUrl = trim(html_entity_decode($locMatch[1], ENT_QUOTES, 'UTF-8'));
+                    if (!empty($pUrl)) {
+                        $childPageUrls[] = $pUrl;
+                    }
+                }
+            }
+        }
+
+        // 配下にサイトマップがあれば再帰的に取得
+        if (!empty($childSitemaps)) {
+            foreach ($childSitemaps as $childSitemapUrl) {
+                $parseSitemap($childSitemapUrl, $depth + 1);
+            }
+        }
+
+        // ページURLがあれば保存
+        if (!empty($childPageUrls)) {
+            foreach ($childPageUrls as $pUrl) {
+                if (!in_array($pUrl, $pageUrls)) {
+                    $pageUrls[] = $pUrl;
+                }
+            }
+        }
+
+        // C. フォールバック: <sitemap>/<url> タグ分けがない平坦なリストの場合
+        if (empty($childSitemaps) && empty($childPageUrls)) {
+            preg_match_all('/<loc>(.*?)<\/loc>/is', $xmlContent, $genericMatches);
+            if (!empty($genericMatches[1])) {
+                foreach ($genericMatches[1] as $gUrl) {
+                    $gUrl = trim(html_entity_decode($gUrl, ENT_QUOTES, 'UTF-8'));
+                    if (empty($gUrl)) continue;
+
+                    if (str_contains(strtolower($gUrl), '.xml') || str_contains($xmlContent, '<sitemapindex')) {
+                        $parseSitemap($gUrl, $depth + 1);
+                    } else {
+                        if (!in_array($gUrl, $pageUrls)) {
+                            $pageUrls[] = $gUrl;
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    // 候補サイトマップを順番に試行
+    foreach ($candidateSitemaps as $sitemapUrl) {
+        $parseSitemap($sitemapUrl);
+        if (!empty($pageUrls)) {
+            break;
+        }
     }
 
-    $sitemapUrls = array_values(array_unique(array_filter($sitemapUrls)));
-    return !empty($sitemapUrls) ? $sitemapUrls : [$targetUrl];
+    $pageUrls = array_values(array_unique(array_filter($pageUrls)));
+    return !empty($pageUrls) ? $pageUrls : [$targetUrl];
 }
 
 /**
- * 6. 単一ページの検証（デモリンク、404エラー、reCAPTCHA）
+ * 6. 単一ページの検証（チェックボックスによる高速化対応）
  */
-function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', string $pass = ''): array {
+function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', string $pass = '', array $options = []): array {
     $parsedUrl = parse_url($pageUrl);
     $host = $parsedUrl['host'] ?? '';
     $cleanHost = preg_replace('/^www\./', '', $host);
+
+    // デフォルトは全チェック
+    $chkNoindex   = $options['check_noindex'] ?? true;
+    $chkDemo      = $options['check_demo'] ?? true;
+    $chkBroken    = $options['check_broken_link'] ?? true;
+    $chkOgp       = $options['check_ogp'] ?? true;
+    $chkRecaptcha = $options['check_recaptcha'] ?? true;
 
     $ch = curl_init();
     curl_setopt_array($ch, getCurlOptions($pageUrl, $user, $pass));
@@ -245,8 +343,8 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
     $pageResults = [];
 
-    // meta noindex
-    if (preg_match('/<meta[^>]+name=["\']robots["\'][^>]+content=["\'][^"\']*noindex[^"\']*["\']/i', $html)) {
+    // A. meta noindex
+    if ($chkNoindex && preg_match('/<meta[^>]+name=["\']robots["\'][^>]+content=["\'][^"\']*noindex[^"\']*["\']/i', $html)) {
         $pageResults[] = 'metaタグに noindex が残っています';
     }
 
@@ -256,48 +354,74 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
     @$dom->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
     $xpath = new DOMXPath($dom);
 
-    // デモリンク & 内部リンクチェック
+    // B. デモリンク & 内部リンク収集
     $aTags = $xpath->query('//a[@href]');
     $searchKeywords = array_filter(array_map('trim', explode(',', $demoDomain . ',demo.,test.')));
     $internalLinks = [];
 
     foreach ($aTags as $a) {
         $href = $a->getAttribute('href');
-        foreach ($searchKeywords as $kw) {
-            if (!empty($kw) && str_contains($href, $kw)) {
-                $pageResults[] = "不要リンク検出: {$href}";
-                break;
+        if ($chkDemo) {
+            foreach ($searchKeywords as $kw) {
+                if (!empty($kw) && str_contains($href, $kw)) {
+                    $pageResults[] = "不要リンク検出: {$href}";
+                    break;
+                }
             }
         }
-        if (str_contains($href, $cleanHost) && !str_contains($href, '#') && !str_contains($href, 'mailto:')) {
+        if ($chkBroken && str_contains($href, $cleanHost) && !str_contains($href, '#') && !str_contains($href, 'mailto:')) {
             $internalLinks[] = $href;
         }
     }
 
-    // 内部リンク切れ (404エラー)
-    $uniqueLinks = array_slice(array_unique($internalLinks), 0, 10);
-    foreach ($uniqueLinks as $link) {
-        $chLink = curl_init();
-        curl_setopt_array($chLink, getCurlOptions($link, $user, $pass));
-        curl_setopt($chLink, CURLOPT_NOBODY, true);
-        curl_exec($chLink);
-        $linkCode = curl_getinfo($chLink, CURLINFO_HTTP_CODE);
-        curl_close($chLink);
+    // C. 内部リンク切れ (404エラー)
+    if ($chkBroken && !empty($internalLinks)) {
+        $uniqueLinks = array_slice(array_unique($internalLinks), 0, 10);
+        foreach ($uniqueLinks as $link) {
+            $chLink = curl_init();
+            curl_setopt_array($chLink, getCurlOptions($link, $user, $pass));
+            curl_setopt($chLink, CURLOPT_NOBODY, true);
+            curl_exec($chLink);
+            $linkCode = curl_getinfo($chLink, CURLINFO_HTTP_CODE);
+            curl_close($chLink);
 
-        if ($linkCode === 404) {
-            $pageResults[] = "リンク切れ(404): {$link}";
+            if ($linkCode === 404) {
+                $pageResults[] = "リンク切れ(404): {$link}";
+            }
         }
     }
 
-    // OGP
-    $ogNode = $xpath->query('//meta[@property="og:image"]/@content');
-    if ($ogNode->length === 0 && ($parsedUrl['path'] ?? '/') === '/') {
-        $pageResults[] = 'トップページに og:image タグが存在しません';
+    // D. OGP画像
+    if ($chkOgp && ($parsedUrl['path'] ?? '/') === '/') {
+        $ogNode = $xpath->query('//meta[@property="og:image"]/@content');
+        if ($ogNode->length === 0) {
+            $pageResults[] = 'トップページに og:image タグが存在しません';
+        }
     }
 
-    // フォーム検証
+    // E. フォーム検証 & reCAPTCHA
     $forms = $xpath->query('//form');
-    if ($forms->length > 0) {
+    $isContactFormPresent = false;
+
+    foreach ($forms as $form) {
+        $formClass = $form->getAttribute('class');
+        $formRole  = $form->getAttribute('role');
+        if ($formRole === 'search' || str_contains($formClass, 'search')) continue;
+
+        $searchInputs = $xpath->query('.//input[@name="s" or @type="search"]', $form);
+        if ($searchInputs->length > 0) continue;
+
+        $isPluginForm = preg_match('/(wpcf7|mw_wp_form|wpforms|gform|frm_form)/i', $formClass);
+        $textareas = $xpath->query('.//textarea', $form);
+        $inputs = $xpath->query('.//input[@type="text" or @type="email" or @type="tel" or not(@type)]', $form);
+
+        if ($isPluginForm || $textareas->length > 0 || $inputs->length >= 2) {
+            $isContactFormPresent = true;
+            break;
+        }
+    }
+
+    if ($chkRecaptcha && $isContactFormPresent) {
         $allCssText = '';
         $styles = $xpath->query('//style');
         foreach ($styles as $s) { $allCssText .= $s->nodeValue . "\n"; }
@@ -333,7 +457,7 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
     return [
         'url' => $pageUrl,
-        'has_form' => ($forms->length > 0),
+        'has_form' => $isContactFormPresent,
         'status' => empty($pageResults) ? 'OK' : 'NG',
         'issues' => $pageResults
     ];
@@ -344,7 +468,7 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 // AJAX: Step 1 サイト全体＆WP初期検証 ＋ サイトマップ解析
 // --------------------------------------------------
 if (isset($_GET['action']) && $_GET['action'] === 'init') {
-    if (ob_get_length()) ob_clean(); // レスポンスノイズのクリア
+    if (ob_get_length()) ob_clean();
     header('Content-Type: application/json; charset=utf-8');
 
     $targetUrl = $_POST['url'] ?? '';
@@ -365,15 +489,22 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     $scheme = $parsedUrl['scheme'] ?? 'https';
     $cleanHost = preg_replace('/^www\./', '', $host);
 
-    $siteResults = [
-        checkSslRedirect($host, $parsedUrl['path'] ?? '/', $basicUser, $basicPass),
-        checkWwwRedirect($host, $scheme, $basicUser, $basicPass),
-        checkDnsRecords($cleanHost),
-    ];
+    // サイト・サーバー基本設定の検証（チェックがある場合のみ）
+    $siteResults = [];
+    if (!empty($_POST['check_site_base'])) {
+        $siteResults = [
+            checkSslRedirect($host, $parsedUrl['path'] ?? '/', $basicUser, $basicPass),
+            checkWwwRedirect($host, $scheme, $basicUser, $basicPass),
+            checkDnsRecords($cleanHost),
+        ];
 
-    $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
-    if (!empty($wpApiData['results']) && is_array($wpApiData['results'])) {
-        $siteResults = array_merge($siteResults, $wpApiData['results']);
+        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
+        if (!empty($wpApiData['results']) && is_array($wpApiData['results'])) {
+            $siteResults = array_merge($siteResults, $wpApiData['results']);
+        }
+    } else {
+        // APIからサイト名や管理画面URLだけは取得しておく
+        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
     }
 
     $siteName = $wpApiData['info']['site_name'] ?? '';
@@ -388,7 +519,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
         }
     }
 
-    $scanUrls = fetchSitemapUrls($host, $scheme, $targetUrl, $basicUser, $basicPass);
+    // ページ巡回項目が1つでもチェックされている場合のみサイトマップを解析
+    $hasPageCheck = !empty($_POST['check_noindex']) || !empty($_POST['check_demo']) || !empty($_POST['check_broken_link']) || !empty($_POST['check_ogp']) || !empty($_POST['check_recaptcha']);
+
+    $scanUrls = [];
+    if ($hasPageCheck) {
+        $scanUrls = fetchSitemapUrls($host, $scheme, $targetUrl, $basicUser, $basicPass);
+    }
 
     echo json_encode([
         'status' => 'success',
@@ -406,8 +543,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
 // --------------------------------------------------
 // AJAX: Step 2 ページ単位の回遊検証
 // --------------------------------------------------
+
+// scan_page アクション部分（POSTオプションの引き渡し）
 if (isset($_GET['action']) && $_GET['action'] === 'scan_page') {
-    if (ob_get_length()) ob_clean(); // レスポンスノイズのクリア
+    if (ob_get_length()) ob_clean();
     header('Content-Type: application/json; charset=utf-8');
 
     $pageUrl = $_POST['page_url'] ?? '';
@@ -415,7 +554,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'scan_page') {
     $basicUser = $_POST['basic_user'] ?? '';
     $basicPass = $_POST['basic_pass'] ?? '';
 
-    $result = scanSinglePage($pageUrl, $demoDomain, $basicUser, $basicPass);
+    $options = [
+        'check_noindex' => !empty($_POST['check_noindex']),
+        'check_demo' => !empty($_POST['check_demo']),
+        'check_broken_link' => !empty($_POST['check_broken_link']),
+        'check_ogp' => !empty($_POST['check_ogp']),
+        'check_recaptcha' => !empty($_POST['check_recaptcha']),
+    ];
+
+    $result = scanSinglePage($pageUrl, $demoDomain, $basicUser, $basicPass, $options);
     echo json_encode($result);
     exit;
 }
