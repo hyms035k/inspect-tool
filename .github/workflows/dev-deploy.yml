@@ -1,0 +1,39 @@
+name: Auto Deploy via FTP
+
+on:
+  push:
+    branches:
+      - main  # mainブランチに変更があった時だけ動く
+
+jobs:
+  web-deploy:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get latest code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync files
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.DEV_FTP_SERVER }}
+          username: ${{ secrets.DEV_FTP_USERNAME }}
+          password: ${{ secrets.DEV_FTP_PASSWORD }}
+
+          # 【重要】アップロード先のフォルダ指定
+          # サーバーのルートなら ./public_html/ など
+          # 特定のテーマフォルダなら ./public_html/wp-content/themes/my-theme/ など
+          # ※必ず最後にスラッシュ / を付けてください
+          server-dir: /kbzdemo.xsrv.jp/public_html/kurabiz/inspect-tool/
+
+          # Gitで除外しているファイル(.gitignore)はアップロードしない設定
+          exclude: |
+            **/.git*
+            **/.git*/**
+            .vscode
+            .vscode/**
+            *.md
+            .ftp-deploy-sync-state.json
+            .gitignore
