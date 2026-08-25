@@ -170,5 +170,4 @@ echo json_encode([
     'captcha_on' => $captchaOn,
     'captcha_detail' => $captchaDetail,
     'remained_files' => $remainedFiles,
-    'sgPage' => $sgPage,
 ]);

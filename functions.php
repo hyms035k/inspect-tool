@@ -126,7 +126,7 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
         if (is_array($apiData) && isset($apiData['status']) && $apiData['status'] === 'success') {
             $siteInfo['site_name'] = $apiData['site_name'] ?? '';
 
-            if($apiData['admin_url']){
+            if($apiData['admin_url'] != '-'){
                 $ch = curl_init();
                 curl_setopt_array($ch, getCurlOptions($apiData['admin_url'], $user, $pass));
                 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
