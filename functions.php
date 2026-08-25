@@ -433,7 +433,11 @@ function scanSinglePage(string $pageUrl, string $demoDomain, array $options = []
         if ($chkDemo) {
             foreach ($searchKeywords as $kw) {
                 if (!empty($kw) && str_contains($href, $kw)) {
-                    $pageResults[] = "不要リンク検出: {$href}";
+                    $issueMsg = "不要リンク検出: {$href}";
+                    // ★重複して配列に追加されないようチェックを追加
+                    if (!in_array($issueMsg, $pageResults)) {
+                        $pageResults[] = $issueMsg;
+                    }
                     break;
                 }
             }

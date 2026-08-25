@@ -139,30 +139,39 @@ $loginUrlChanged = false;
 $loginUrlDetail = '標準のwp-login.phpから変更されていません';
 $captchaOn = false;
 $captchaDetail = '画像認証が見つかりません（SiteGuard等の設定を確認してください）';
+$adminUrl = site_url('wp-login.php'); // デフォルト管理URL
+
+// プラグインが「実際に有効化（アクティブ）」されているか判定
+$isSiteGuardActive = is_plugin_active('siteguard/siteguard.php') || (function_exists('is_plugin_active_for_network') && is_plugin_active_for_network('siteguard/siteguard.php'));
+$isWpsHideActive   = is_plugin_active('wps-hide-login/wps-hide-login.php') || (function_exists('is_plugin_active_for_network') && is_plugin_active_for_network('wps-hide-login/wps-hide-login.php'));
 
 // A. SiteGuard WP Plugin の判定
-if (is_plugin_active('siteguard/siteguard.php') || defined('SITEGUARD_VERSION')) {
+if ($isSiteGuardActive) {
     // ログインページ変更
     $sgPage = get_option('siteguard_config');
 
-    if (!empty($sgPage['renamelogin_path']) && $sgPage['renamelogin_path'] !== 'wp-login.php') {
-        $loginUrlChanged = true;
-        $loginUrlDetail = "SiteGuardで変更済み";
+    if (is_array($sgPage)) {
+        // ログインページ変更
+        if (!empty($sgPage['renamelogin_enable']) && !empty($sgPage['renamelogin_path']) && $sgPage['renamelogin_path'] !== 'wp-login.php') {
+            $loginUrlChanged = true;
+            $loginUrlDetail = "SiteGuardで変更済み";
+            $adminUrl = site_url($sgPage['renamelogin_path']);
+        }
+
+        // 画像認証（ログインキャプチャ）
+        if (!empty($sgPage['captcha_enable']) && !empty($sgPage['captcha_login'])) {
+            $captchaOn = true;
+            $captchaDetail = 'SiteGuardの画像認証が有効（ON）です';
+        }
     }
 
-    // 画像認証（ログインキャプチャ）
-    if (!empty($sgPage['captcha_login'])) {
-        $captchaOn = true;
-        $captchaDetail = 'SiteGuardの画像認証が有効（ON）です';
-    }
-}
-
-// B. WPS Hide Login（別プラグイン使用時）の補足判定
-if (is_plugin_active('wps-hide-login/wps-hide-login.php')) {
+// B. WPS Hide Login が「有効化」されている場合のみ設定を評価
+} elseif ($isWpsHideActive) {
     $whlPage = get_option('whl_page');
     if (!empty($whlPage)) {
         $loginUrlChanged = true;
         $loginUrlDetail = "WPS Hide Loginで変更済み（/{$whlPage}）";
+        $adminUrl = site_url($whlPage);
     }
 }
 
@@ -187,13 +196,6 @@ foreach ($unnecessaryFiles as $file) {
 
 // サイト名・管理画面URLの取得
 $siteName = get_bloginfo('name');
-$adminUrl = site_url('wp-login.php');
-
-if (!empty($sgPage['renamelogin_path'])) {
-    $adminUrl = site_url($sgPage['renamelogin_path']);
-} elseif (!empty($whlPage)) {
-    $adminUrl = site_url($whlPage);
-}
 
 // --- クラビズ用アカウント「kbc2do3」の存在チェック ---
 $kbc2do3Exists = (username_exists('kbc2do3') !== false);

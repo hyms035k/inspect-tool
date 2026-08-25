@@ -96,14 +96,18 @@ function updateSummaryTable() {
             badge = '<span class="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded border border-slate-300">除外</span>';
             detailHtml = '';
         } else {
-            const isOk = item.list.length === 0;
+            // ページURLの重複を排除してユニークなURLリストを作成
+            const uniqueUrls = [...new Set(item.list.map(i => i.url))];
+
+            const isOk = uniqueUrls.length === 0;
+
             badge = isOk
                 ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-0.5 rounded">OK</span>'
                 : '<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-0.5 rounded">NG</span>';
 
             detailHtml = isOk
                 ? `<span class="text-slate-600">${item.okMsg}</span>`
-                : `<div class="text-red-600 font-semibold mb-1">${item.ngMsg}（${item.list.length} ページ）:</div><ul class="list-disc list-inside text-xs space-y-0.5 text-slate-700">${item.list.map(i => `<li><a href="${escapeHtml(i.url)}" target="_blank" class="text-blue-600 hover:underline font-mono">${escapeHtml(i.url)}</a></li>`).join('')}</ul>`;
+                : `<div class="text-red-600 font-semibold mb-1">${item.ngMsg}（${uniqueUrls.length} ページ）:</div><ul class="list-disc list-inside text-xs space-y-0.5 text-slate-700">${uniqueUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" class="text-blue-600 hover:underline font-mono">${escapeHtml(url)}</a></li>`).join('')}</ul>`;
         }
 
         const tr = document.createElement('tr');
