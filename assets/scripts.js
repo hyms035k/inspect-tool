@@ -1,7 +1,5 @@
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 検証対象サイトから取得した文字列（URL、ページタイトル、検出メッセージ等）は
-// 信頼できない入力として扱い、innerHTMLに挿入する前に必ずエスケープする。
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
     return String(str)
@@ -15,9 +13,49 @@ function escapeHtml(str) {
 let isPaused = false;
 let isAborted = false;
 let scannedResultsMap = new Map();
-let currentFormOptions = {}; // 選択されたチェックボックス状態の保持用
+let currentFormOptions = {};
 
-// サマリーテーブルの更新
+// ★シークレット取得状態による画面切り替え制御
+function setSecretState(secretValue) {
+    const secretBtnArea = document.getElementById('secretBtnArea');
+    const secretInputArea = document.getElementById('secretInputArea');
+    const siteSecretInput = document.getElementById('siteSecret');
+    const checkOptionsContainer = document.getElementById('checkOptionsContainer');
+    const submitBtn = document.getElementById('submitBtn');
+
+    if (secretValue) {
+        // 取得済み：ボタンを隠し、入力欄・チェック項目・開始ボタンを表示
+        siteSecretInput.value = secretValue;
+        secretBtnArea.classList.add('hidden');
+        secretInputArea.classList.remove('hidden');
+        checkOptionsContainer.classList.remove('hidden');
+        submitBtn.classList.remove('hidden');
+    } else {
+        // 未取得：ボタンのみ表示、他は非表示
+        siteSecretInput.value = '';
+        secretBtnArea.classList.remove('hidden');
+        secretInputArea.classList.add('hidden');
+        checkOptionsContainer.classList.add('hidden');
+        submitBtn.classList.add('hidden');
+    }
+}
+
+// URL入力時に localStorage からシークレットを判定して自動切り替え
+document.getElementById('targetUrl').addEventListener('input', function() {
+    const url = this.value.trim();
+    if (!url) {
+        setSecretState('');
+        return;
+    }
+    try {
+        const host = new URL(url.startsWith('http') ? url : 'https://' + url).hostname.replace(/^www\./, '');
+        const savedSecret = localStorage.getItem('site_secret_' + host);
+        setSecretState(savedSecret || '');
+    } catch (e) {
+        setSecretState('');
+    }
+});
+
 function updateSummaryTable() {
     const pageSummaryResultBody = document.getElementById('pageSummaryResultBody');
     const pageSummaryResultContainer = document.getElementById('pageSummaryResultContainer');
@@ -40,7 +78,6 @@ function updateSummaryTable() {
         }
     });
 
-    // 項目とチェック状態の定義
     const items = [
         { key: 'check_noindex', title: 'noindexとBasic認証の解除', list: pageIssuesSummary.noindex, okMsg: '巡回したすべてのページで公開状態（noindex等なし）を確認しました。', ngMsg: 'ページの不備・アクセス不可を検出しました' },
         { key: 'check_demo', title: 'デモサイトへのリンク', list: pageIssuesSummary.demoLink, okMsg: '全ページで不要なデモリンクは見つかりませんでした。', ngMsg: '不要なデモリンクを検出しました' },
@@ -52,16 +89,13 @@ function updateSummaryTable() {
 
     items.forEach(item => {
         const isChecked = !!currentFormOptions[item.key];
-
         let badge = '';
         let detailHtml = '';
 
         if (!isChecked) {
-            // 除外の場合
             badge = '<span class="bg-slate-100 text-slate-600 text-xs font-bold px-2 py-0.5 rounded border border-slate-300">除外</span>';
-            detailHtml = ''; // 空欄
+            detailHtml = '';
         } else {
-            // チェックありの場合
             const isOk = item.list.length === 0;
             badge = isOk
                 ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-0.5 rounded">OK</span>'
@@ -80,7 +114,6 @@ function updateSummaryTable() {
     pageSummaryResultContainer.classList.remove('hidden');
 }
 
-// 1ページのみをピンポイント再検証
 async function rescanSinglePage(url, rowElem) {
     const form = document.getElementById('checkerForm');
     const formData = new FormData(form);
@@ -122,7 +155,7 @@ async function rescanSinglePage(url, rowElem) {
     }
 }
 
-// シークレット自動取得ボタン
+// シークレット自動取得ボタン処理
 document.getElementById('fetchSecretBtn').addEventListener('click', async () => {
     const btn = document.getElementById('fetchSecretBtn');
     const targetUrl = document.getElementById('targetUrl').value;
@@ -133,8 +166,6 @@ document.getElementById('fetchSecretBtn').addEventListener('click', async () => 
 
     const formData = new FormData();
     formData.append('url', targetUrl);
-    formData.append('basic_user', document.getElementById('basicUser').value);
-    formData.append('basic_pass', document.getElementById('basicPass').value);
 
     btn.disabled = true;
     btn.textContent = '取得中...';
@@ -144,8 +175,11 @@ document.getElementById('fetchSecretBtn').addEventListener('click', async () => 
         const data = await res.json();
 
         if (data.status === 'success' && data.site_secret) {
-            document.getElementById('siteSecret').value = data.site_secret;
-            alert('シークレットを取得しました。このまま検証を実行できます。');
+            // 成功したら画面・localStorageへ反映
+            const host = new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname.replace(/^www\./, '');
+            localStorage.setItem('site_secret_' + host, data.site_secret);
+            
+            setSecretState(data.site_secret);
         } else {
             alert('取得失敗: ' + (data.message || '不明なエラー'));
         }
@@ -153,11 +187,10 @@ document.getElementById('fetchSecretBtn').addEventListener('click', async () => 
         alert('通信エラー: ' + err.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = '自動取得';
+        btn.textContent = 'シークレットを自動取得';
     }
 });
 
-// ボタンイベント設定
 document.getElementById('pauseBtn').addEventListener('click', () => {
     isPaused = true;
     document.getElementById('pauseBtn').classList.add('hidden');
@@ -193,7 +226,6 @@ document.getElementById('reScanNgBtn').addEventListener('click', async () => {
     document.getElementById('reScanNgBtn').disabled = false;
 });
 
-// メイン送信イベント
 document.getElementById('checkerForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
@@ -222,7 +254,6 @@ document.getElementById('checkerForm').addEventListener('submit', async function
 
     const formData = new FormData(this);
 
-    // フォームのチェックボックス選択状態を記憶
     currentFormOptions = {
         check_site_base: !!formData.get('check_site_base'),
         check_noindex: !!formData.get('check_noindex'),
@@ -232,13 +263,12 @@ document.getElementById('checkerForm').addEventListener('submit', async function
         check_recaptcha: !!formData.get('check_recaptcha'),
     };
 
-    // ページ巡回を行う項目があるか判定
     const hasPageCheck = currentFormOptions.check_noindex || currentFormOptions.check_demo || currentFormOptions.check_broken_link || currentFormOptions.check_ogp || currentFormOptions.check_recaptcha;
 
     submitBtn.disabled = true;
     submitBtn.classList.add('opacity-50');
     progressArea.classList.remove('hidden');
-    realtimeLogContainer.classList.add('hidden'); // 初期状態は非表示
+    realtimeLogContainer.classList.add('hidden');
 
     siteInfoContainer.classList.add('hidden');
     siteResultContainer.classList.add('hidden');
@@ -260,7 +290,6 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             return;
         }
 
-        // サイト概要表示
         if (initData.site_info) {
             document.getElementById('infoSiteName').textContent = initData.site_info.site_name;
             const siteUrlElem = document.getElementById('infoSiteUrl');
@@ -276,7 +305,6 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             siteInfoContainer.classList.remove('hidden');
         }
 
-        // 基本設定結果の描画
         if (currentFormOptions.check_site_base && Array.isArray(initData.site_results)) {
             initData.site_results.forEach(res => {
                 const tr = document.createElement('tr');
@@ -289,12 +317,11 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             siteResultContainer.classList.remove('hidden');
         }
 
-        // ページ巡回を行う場合のみ実行
         if (hasPageCheck && Array.isArray(initData.scan_urls) && initData.scan_urls.length > 0) {
             const scanUrls = initData.scan_urls;
             const total = scanUrls.length;
             
-            realtimeLogContainer.classList.remove('hidden'); // ログエリアを表示
+            realtimeLogContainer.classList.remove('hidden');
             pauseBtn.classList.remove('hidden');
             stopBtn.classList.remove('hidden');
 
@@ -361,16 +388,13 @@ document.getElementById('checkerForm').addEventListener('submit', async function
                 progressStatus.textContent = '巡回検証が完了しました！';
             }
         } else {
-            // ページ巡回を行わない（基本設定のみ等）場合
             progressBar.style.width = '100%';
             progressCount.textContent = '完了';
             progressStatus.textContent = '基本設定の検証が完了しました。';
         }
 
-        // 単一ページ検証結果サマリーの描画
         updateSummaryTable();
 
-        // NGページが存在する場合のみ再検証ボタン表示
         const hasNg = Array.from(scannedResultsMap.values()).some(r => r.status === 'NG');
         if (hasNg) {
             reScanNgBtn.classList.remove('hidden');

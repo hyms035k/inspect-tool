@@ -1,16 +1,14 @@
 <?php
-// 不要な出力バッファを初期化
 ob_start();
 
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
-
 /**
  * cURL共通オプション取得
  */
-function getCurlOptions(string $url, string $user = '', string $pass = ''): array {
-    $opts = [
+function getCurlOptions(string $url): array {
+    return [
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => true,
@@ -21,20 +19,15 @@ function getCurlOptions(string $url, string $user = '', string $pass = ''): arra
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_ENCODING => '',
     ];
-    if (!empty($user) && !empty($pass)) {
-        $opts[CURLOPT_USERPWD] = "{$user}:{$pass}";
-    }
-    return $opts;
 }
-
 
 /**
  * 1. SSLリダイレクトチェック
  */
-function checkSslRedirect(string $host, string $path, string $user = '', string $pass = ''): array {
+function checkSslRedirect(string $host, string $path): array {
     $httpUrl = 'http://' . $host . ($path ?: '/');
     $ch = curl_init();
-    curl_setopt_array($ch, getCurlOptions($httpUrl, $user, $pass));
+    curl_setopt_array($ch, getCurlOptions($httpUrl));
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
     $response = curl_exec($ch);
     $info = curl_getinfo($ch);
@@ -52,12 +45,10 @@ function checkSslRedirect(string $host, string $path, string $user = '', string 
         }
     }
 
-    // リダイレクトの有無だけでなく、証明書自体が有効かも別途検証する
-    // （getCurlOptions は CURLOPT_SSL_VERIFYPEER=false のため、ここだけ上書きして厳密に検証する）
     $certOk = false;
     $certDetail = '証明書を検証できませんでした。';
     $chCert = curl_init();
-    curl_setopt_array($chCert, getCurlOptions('https://' . $host . ($path ?: '/'), $user, $pass));
+    curl_setopt_array($chCert, getCurlOptions('https://' . $host . ($path ?: '/')));
     curl_setopt($chCert, CURLOPT_SSL_VERIFYPEER, true);
     curl_setopt($chCert, CURLOPT_SSL_VERIFYHOST, 2);
     curl_setopt($chCert, CURLOPT_NOBODY, true);
@@ -81,17 +72,16 @@ function checkSslRedirect(string $host, string $path, string $user = '', string 
     ];
 }
 
-
 /**
  * 2. wwwありなし正規化チェック
  */
-function checkWwwRedirect(string $host, string $scheme, string $user = '', string $pass = ''): array {
+function checkWwwRedirect(string $host, string $scheme): array {
     $isWww = strpos($host, 'www.') === 0;
     $altHost = $isWww ? substr($host, 4) : 'www.' . $host;
     $altUrl = $scheme . '://' . $altHost;
 
     $ch = curl_init();
-    curl_setopt_array($ch, getCurlOptions($altUrl, $user, $pass));
+    curl_setopt_array($ch, getCurlOptions($altUrl));
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
     curl_exec($ch);
     $altInfo = curl_getinfo($ch);
@@ -102,7 +92,6 @@ function checkWwwRedirect(string $host, string $scheme, string $user = '', strin
     }
     return ['title' => 'ドメインのwwwありなし確認', 'status' => 'NG', 'detail' => "サブドメイン（{$altHost}）からの転送（301/302）が確認できません（HTTP " . ($altInfo['http_code'] ?? '0') . '）。'];
 }
-
 
 /**
  * 3. DNS設定（SPF / DMARC）チェック
@@ -134,15 +123,19 @@ function checkDnsRecords(string $cleanHost): array {
     ];
 }
 
-
 /**
  * 4-0. check-api.php のブートストラップ呼び出し（初回シークレット自動取得）
  */
-function bootstrapSiteSecret(string $host, string $scheme, string $user = '', string $pass = ''): array {
-    $url = $scheme . '://' . $host . '/check-api.php?action=bootstrap';
+function bootstrapSiteSecret(string $targetUrl): array {
+    $parsedUrl = parse_url($targetUrl);
+    $scheme = $parsedUrl['scheme'] ?? 'https';
+    $host = $parsedUrl['host'] ?? '';
+    $path = rtrim($parsedUrl['path'] ?? '', '/');
+
+    $url = $scheme . '://' . $host. $path . '/check-api.php?action=bootstrap';
 
     $ch = curl_init();
-    curl_setopt_array($ch, getCurlOptions($url, $user, $pass));
+    curl_setopt_array($ch, getCurlOptions($url));
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, '');
     $response = curl_exec($ch);
@@ -159,16 +152,13 @@ function bootstrapSiteSecret(string $host, string $scheme, string $user = '', st
             return ['status' => 'error', 'message' => $data['error']];
         }
     }
-    return ['status' => 'error', 'message' => 'check-api.php からシークレットを取得できませんでした（未配置、アップロードから10分以上経過、等の可能性があります）。'];
+    return ['status' => 'error', 'message' => 'check-api.php からシークレットを取得できませんでした（未配置の可能性があります）。'];
 }
-
 
 /**
  * 4. check-api.php 連携 (WP内部詳細チェック)
  */
-function checkWpApi(string $host, string $scheme, string $cleanHost, string $user = '', string $pass = '', string $siteSecret = ''): array {
-    // $siteSecret は対象サイトの wp-config.php に define('SITE_CHECK_SECRET', '...') した値と
-    // 同じものをフォームから入力してもらう。空の場合はAPI連携をスキップする。
+function checkWpApi(string $targetUrl, string $cleanHost, string $siteSecret = ''): array {
     if (empty($siteSecret)) {
         return [
             'results' => [[
@@ -179,11 +169,18 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
             'info' => ['site_name' => '', 'admin_url' => '-']
         ];
     }
+
+    $parsedUrl = parse_url($targetUrl);
+    $scheme = $parsedUrl['scheme'] ?? 'https';
+    $host = $parsedUrl['host'] ?? '';
+    $path = rtrim($parsedUrl['path'] ?? '', '/');
+
     $calcToken = hash_hmac('sha256', $cleanHost, $siteSecret);
-    $apiUrl = $scheme . '://' . $host . '/check-api.php?token=' . $calcToken;
+
+    $apiUrl = $scheme . '://' . $host . $path . '/check-api.php?token=' . $calcToken;
 
     $chApi = curl_init();
-    curl_setopt_array($chApi, getCurlOptions($apiUrl, $user, $pass));
+    curl_setopt_array($chApi, getCurlOptions($apiUrl));
     $apiResponse = curl_exec($chApi);
     $apiHttpCode = curl_getinfo($chApi, CURLINFO_HTTP_CODE);
     $apiHeaderSize = curl_getinfo($chApi, CURLINFO_HEADER_SIZE);
@@ -204,7 +201,7 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
 
             if($apiData['admin_url'] != '-'){
                 $ch = curl_init();
-                curl_setopt_array($ch, getCurlOptions($apiData['admin_url'], $user, $pass));
+                curl_setopt_array($ch, getCurlOptions($apiData['admin_url']));
                 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
                 curl_exec($ch);
                 $altInfo = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -218,16 +215,13 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
             }
 
             $wpSubDir = !empty($apiData['wp_subdir']) ? '/' . trim($apiData['wp_subdir'], '/') : '';
-            $wpLoginUrl = $scheme . '://' . $host . $wpSubDir . '/wp-login.php';
+            $wpLoginUrl = $scheme . '://' . $host . $path . $wpSubDir . '/wp-login.php';
 
             $results[] = ['title' => 'WordPressバージョン', 'status' => !empty($apiData['wp_is_latest']) ? 'OK' : 'NG', 'detail' => !empty($apiData['wp_is_latest']) ? "最新です（v{$apiData['wp_version']}）。" : "要更新（現在: v{$apiData['wp_version']}）。"];
             $results[] = ['title' => 'プラグインバージョン', 'status' => empty($apiData['outdated_plugins']) ? 'OK' : 'NG', 'detail' => empty($apiData['outdated_plugins']) ? 'すべて最新です。' : '要更新: ' . implode(', ', $apiData['outdated_plugins'])];
 
-            // 自動更新設定 (WP_AUTO_UPDATE_CORE) の判定
             $autoSetting = $apiData['auto_update_setting'] ?? 'default';
             $autoDetail = "設定値: " . var_export($autoSetting, true);
-
-            // false（手動・停止）になっていなければ OK とする例（社内ルールに合わせて調整可能）
             $isAutoOk = ($autoSetting !== false && $autoSetting !== 'false');
             $results[] = [
                 'title' => '自動更新設定(WP_AUTO_UPDATE_CORE)',
@@ -237,9 +231,8 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
 
             $results[] = ['title' => '管理者メールアドレス', 'status' => (isset($apiData['admin_email']) && str_contains($apiData['admin_email'], 'web-support@')) ? 'OK' : 'NG', 'detail' => "設定値: " . ($apiData['admin_email'] ?? '未設定')];
 
-            // ログインURL変更確認
             $chLogin = curl_init();
-            curl_setopt_array($chLogin, getCurlOptions($wpLoginUrl, $user, $pass));
+            curl_setopt_array($chLogin, getCurlOptions($wpLoginUrl));
             curl_setopt($chLogin, CURLOPT_FOLLOWLOCATION, false);
             curl_exec($chLogin);
             $loginHttpCode = curl_getinfo($chLogin, CURLINFO_HTTP_CODE);
@@ -252,6 +245,34 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
             }
 
             $results[] = ['title' => 'ログイン画像認証設定', 'status' => !empty($apiData['captcha_on']) ? 'OK' : 'NG', 'detail' => $apiData['captcha_detail'] ?? '未設定'];
+
+            // 社内アカウント「kbc2do3」の残留チェック
+            $hasKbcUser = !empty($apiData['kbc2do3_exists']);
+            $results[] = [
+                'title' => '社内アカウント(kbc2do3)の削除',
+                'status' => !$hasKbcUser ? 'OK' : 'NG',
+                'detail' => !$hasKbcUser ? 'kbc2do3 アカウントは削除されています。' : 'アカウント「kbc2do3」が残留しています（削除してください）。'
+            ];
+
+            // BackWPup バックアップ設定チェック
+            $bwActive = !empty($apiData['backwpup_active']);
+            $bwHasJobs = !empty($apiData['backwpup_has_jobs']);
+            if ($bwActive && $bwHasJobs) {
+                $bwStatus = 'OK';
+                $bwDetail = 'BackWPupが有効化され、バックアップジョブが設定されています。';
+            } elseif ($bwActive && !$bwHasJobs) {
+                $bwStatus = 'NG';
+                $bwDetail = 'BackWPupは有効化されていますが、バックアップジョブが未設定です。';
+            } else {
+                $bwStatus = 'NG';
+                $bwDetail = 'BackWPup プラグインが有効化されていません。';
+            }
+            $results[] = [
+                'title' => 'BackWPupバックアップ設定',
+                'status' => $bwStatus,
+                'detail' => $bwDetail
+            ];
+
             $results[] = ['title' => '不要ファイルの削除確認', 'status' => empty($apiData['remained_files']) ? 'OK' : 'NG', 'detail' => empty($apiData['remained_files']) ? 'license.txt等 削除確認OK' : '残留ファイル: ' . implode(', ', $apiData['remained_files'])];
         } else {
             $results[] = ['title' => 'WP内部詳細検証 (API未検出)', 'status' => 'NG', 'detail' => 'check-api.php からのレスポンス形式が不正です。'];
@@ -266,135 +287,105 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
     ];
 }
 
-
 /**
- * 5. sitemap.xml の再帰解析と全ページURLの取得（多階層・AIOSEO対応）
+ * 5. sitemap.xml の解析
  */
-function fetchSitemapUrls(string $host, string $scheme, string $targetUrl, string $user = '', string $pass = ''): array {
+function fetchSitemapUrls(string $host, string $scheme, string $targetUrl): array {
     $visitedSitemaps = [];
     $pageUrls = [];
 
-    // 探索するルートサイトマップ候補
+    $parsedUrl = parse_url($targetUrl);
+    $path = rtrim($parsedUrl['path'] ?? '', '/');
+
     $candidateSitemaps = [
-        $scheme . '://' . $host . '/sitemap.xml',
-        $scheme . '://' . $host . '/sitemap_index.xml',
-        $scheme . '://' . $host . '/wp-sitemap.xml',
+        $scheme . '://' . $host . $path . '/sitemap.xml',
+        $scheme . '://' . $host . $path . '/sitemap_index.xml',
+        $scheme . '://' . $host . $path . '/wp-sitemap.xml',
     ];
 
-    // 再帰的にサイトマップ（ネスト含む）をたどる内部関数
-    $parseSitemap = function(string $sitemapUrl, int $depth = 0) use (&$parseSitemap, &$visitedSitemaps, &$pageUrls, $user, $pass) {
-        // 深さ上限（5階層）および同一URLの重複探索防止
-        if ($depth > 5 || in_array($sitemapUrl, $visitedSitemaps)) {
-            return;
-        }
+    $parseSitemap = function(string $sitemapUrl, int $depth = 0) use (&$parseSitemap, &$visitedSitemaps, &$pageUrls) {
+        if ($depth > 5 || in_array($sitemapUrl, $visitedSitemaps)) return;
         $visitedSitemaps[] = $sitemapUrl;
 
         $chSm = curl_init();
-        $opts = getCurlOptions($sitemapUrl, $user, $pass);
-        curl_setopt_array($chSm, $opts);
+        curl_setopt_array($chSm, getCurlOptions($sitemapUrl));
         $smRes = curl_exec($chSm);
         $smCode = curl_getinfo($chSm, CURLINFO_HTTP_CODE);
         $smHeaderSize = curl_getinfo($chSm, CURLINFO_HEADER_SIZE);
         curl_close($chSm);
 
-        if ($smCode !== 200 || $smRes === false) {
-            return;
-        }
+        if ($smCode !== 200 || $smRes === false) return;
 
         $xmlContent = substr($smRes, $smHeaderSize);
-        if (empty($xmlContent)) {
-            return;
-        }
+        if (empty($xmlContent)) return;
 
-        // CDATA タグの除去
         $xmlContent = preg_replace('/<!\[CDATA\[(.*?)\]\]>/s', '$1', $xmlContent);
 
-        // A. <sitemap>...</sitemap> ブロック（配下のサイトマップURL）を抽出
         preg_match_all('/<sitemap[^>]*>(.*?)<\/sitemap>/is', $xmlContent, $sitemapBlocks);
         $childSitemaps = [];
         if (!empty($sitemapBlocks[1])) {
             foreach ($sitemapBlocks[1] as $block) {
                 if (preg_match('/<loc>(.*?)<\/loc>/is', $block, $locMatch)) {
                     $cUrl = trim(html_entity_decode($locMatch[1], ENT_QUOTES, 'UTF-8'));
-                    if (!empty($cUrl)) {
-                        $childSitemaps[] = $cUrl;
-                    }
+                    if (!empty($cUrl)) $childSitemaps[] = $cUrl;
                 }
             }
         }
 
-        // B. <url>...</url> ブロック（実際のページURL）を抽出
         preg_match_all('/<url[^>]*>(.*?)<\/url>/is', $xmlContent, $urlBlocks);
         $childPageUrls = [];
         if (!empty($urlBlocks[1])) {
             foreach ($urlBlocks[1] as $block) {
                 if (preg_match('/<loc>(.*?)<\/loc>/is', $block, $locMatch)) {
                     $pUrl = trim(html_entity_decode($locMatch[1], ENT_QUOTES, 'UTF-8'));
-                    if (!empty($pUrl)) {
-                        $childPageUrls[] = $pUrl;
-                    }
+                    if (!empty($pUrl)) $childPageUrls[] = $pUrl;
                 }
             }
         }
 
-        // 配下にサイトマップがあれば再帰的に取得
         if (!empty($childSitemaps)) {
-            foreach ($childSitemaps as $childSitemapUrl) {
-                $parseSitemap($childSitemapUrl, $depth + 1);
-            }
+            foreach ($childSitemaps as $childSitemapUrl) $parseSitemap($childSitemapUrl, $depth + 1);
         }
 
-        // ページURLがあれば保存
         if (!empty($childPageUrls)) {
             foreach ($childPageUrls as $pUrl) {
-                if (!in_array($pUrl, $pageUrls)) {
-                    $pageUrls[] = $pUrl;
-                }
+                if (!in_array($pUrl, $pageUrls)) $pageUrls[] = $pUrl;
             }
         }
 
-        // C. フォールバック: <sitemap>/<url> タグ分けがない平坦なリストの場合
         if (empty($childSitemaps) && empty($childPageUrls)) {
             preg_match_all('/<loc>(.*?)<\/loc>/is', $xmlContent, $genericMatches);
             if (!empty($genericMatches[1])) {
                 foreach ($genericMatches[1] as $gUrl) {
                     $gUrl = trim(html_entity_decode($gUrl, ENT_QUOTES, 'UTF-8'));
                     if (empty($gUrl)) continue;
-
                     if (str_contains(strtolower($gUrl), '.xml') || str_contains($xmlContent, '<sitemapindex')) {
                         $parseSitemap($gUrl, $depth + 1);
                     } else {
-                        if (!in_array($gUrl, $pageUrls)) {
-                            $pageUrls[] = $gUrl;
-                        }
+                        if (!in_array($gUrl, $pageUrls)) $pageUrls[] = $gUrl;
                     }
                 }
             }
         }
     };
 
-    // 候補サイトマップを順番に試行
     foreach ($candidateSitemaps as $sitemapUrl) {
         $parseSitemap($sitemapUrl);
-        if (!empty($pageUrls)) {
-            break;
-        }
+        if (!empty($pageUrls)) break;
     }
 
     $pageUrls = array_values(array_unique(array_filter($pageUrls)));
     return !empty($pageUrls) ? $pageUrls : [$targetUrl];
 }
 
-
 /**
- * 6. 単一ページの検証（チェックボックスによる高速化対応）
+ * 6. 単一ページの検証（デモドメインデフォルト適用）
  */
-function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', string $pass = '', array $options = []): array {
+function scanSinglePage(string $pageUrl, string $demoDomain, array $options = []): array {
     $parsedUrl = parse_url($pageUrl);
     $host = $parsedUrl['host'] ?? '';
     $cleanHost = preg_replace('/^www\./', '', $host);
 
-    // デフォルトは全チェック
     $chkNoindex   = $options['check_noindex'] ?? true;
     $chkDemo      = $options['check_demo'] ?? true;
     $chkBroken    = $options['check_broken_link'] ?? true;
@@ -402,7 +393,7 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
     $chkRecaptcha = $options['check_recaptcha'] ?? true;
 
     $ch = curl_init();
-    curl_setopt_array($ch, getCurlOptions($pageUrl, $user, $pass));
+    curl_setopt_array($ch, getCurlOptions($pageUrl));
     $rawResponse = curl_exec($ch);
     $info = curl_getinfo($ch);
     $headerSize = $info['header_size'];
@@ -420,20 +411,21 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
     $pageResults = [];
 
-    // A. meta noindex
     if ($chkNoindex && preg_match('/<meta[^>]+name=["\']robots["\'][^>]+content=["\'][^"\']*noindex[^"\']*["\']/i', $html)) {
         $pageResults[] = 'metaタグに noindex が残っています';
     }
 
-    // DOM解析
     libxml_use_internal_errors(true);
     $dom = new DOMDocument();
     @$dom->loadHTML(mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8'));
     $xpath = new DOMXPath($dom);
 
-    // B. デモリンク & 内部リンク収集
+    // ★指定された標準3ドメイン ＋ ユーザー入力値をマージして検知
+    $defaultDemoDomains = ['kbzdemo.xsrv.jp', 'demo.kurabiz.jp', 'demo2.kurabiz.jp', 'demo.', 'test.'];
+    $userDemoDomains = array_filter(array_map('trim', explode(',', $demoDomain)));
+    $searchKeywords = array_unique(array_merge($defaultDemoDomains, $userDemoDomains));
+
     $aTags = $xpath->query('//a[@href]');
-    $searchKeywords = array_filter(array_map('trim', explode(',', $demoDomain . ',demo.,test.')));
     $internalLinks = [];
 
     foreach ($aTags as $a) {
@@ -451,15 +443,11 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
         }
     }
 
-    // C. 内部リンク切れ (404エラー)
     if ($chkBroken && !empty($internalLinks)) {
-        // 以前は array_slice(..., 0, 10) で先頭10件のみ検査しており、
-        // 11件目以降にリンク切れがあっても「OK」と表示されてしまっていた。
-        // 全件検査する（ページ数・リンク数が非常に多いサイトでは検証時間が伸びる点に留意）。
         $uniqueLinks = array_unique($internalLinks);
         foreach ($uniqueLinks as $link) {
             $chLink = curl_init();
-            curl_setopt_array($chLink, getCurlOptions($link, $user, $pass));
+            curl_setopt_array($chLink, getCurlOptions($link));
             curl_setopt($chLink, CURLOPT_NOBODY, true);
             curl_exec($chLink);
             $linkCode = curl_getinfo($chLink, CURLINFO_HTTP_CODE);
@@ -471,7 +459,6 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
         }
     }
 
-    // D. OGP画像
     if ($chkOgp && ($parsedUrl['path'] ?? '/') === '/') {
         $ogNode = $xpath->query('//meta[@property="og:image"]/@content');
         if ($ogNode->length === 0) {
@@ -479,7 +466,6 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
         }
     }
 
-    // E. フォーム検証 & reCAPTCHA
     $forms = $xpath->query('//form');
     $isContactFormPresent = false;
 
@@ -501,8 +487,6 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
         }
     }
 
-    // reCAPTCHA自体を読み込んでいないサイトまで「バッジ非表示CSSがない」でNGにしないよう、
-    // 先に reCAPTCHA スクリプト/API の使用有無を確認する。
     $usesRecaptcha = (bool) preg_match('/(www\.google\.com\/recaptcha|grecaptcha|www\.gstatic\.com\/recaptcha)/i', $html);
 
     if ($chkRecaptcha && $isContactFormPresent && $usesRecaptcha) {
@@ -518,7 +502,7 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
             if (str_contains(parse_url($cssUrl, PHP_URL_HOST) ?? '', $cleanHost)) {
                 $chCss = curl_init();
-                curl_setopt_array($chCss, getCurlOptions($cssUrl, $user, $pass));
+                curl_setopt_array($chCss, getCurlOptions($cssUrl));
                 curl_setopt($chCss, CURLOPT_TIMEOUT, 3);
                 $cssRes = curl_exec($chCss);
                 $cssCode = curl_getinfo($chCss, CURLINFO_HTTP_CODE);
@@ -547,17 +531,14 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
     ];
 }
 
-
 // --------------------------------------------------
-// AJAX: シークレット自動取得（check-api.phpのブートストラップを中継）
+// AJAX: シークレット自動取得
 // --------------------------------------------------
 if (isset($_GET['action']) && $_GET['action'] === 'bootstrap_secret') {
     if (ob_get_length()) ob_clean();
     header('Content-Type: application/json; charset=utf-8');
 
     $targetUrl = $_POST['url'] ?? '';
-    $basicUser = $_POST['basic_user'] ?? '';
-    $basicPass = $_POST['basic_pass'] ?? '';
 
     if (empty($targetUrl)) {
         echo json_encode(['status' => 'error', 'message' => 'URLを入力してください']);
@@ -566,15 +547,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'bootstrap_secret') {
     if (!preg_match('/^https?:\/\//', $targetUrl)) {
         $targetUrl = 'https://' . $targetUrl;
     }
-    $parsedUrl = parse_url($targetUrl);
-    $host = $parsedUrl['host'] ?? '';
-    $scheme = $parsedUrl['scheme'] ?? 'https';
 
-    $result = bootstrapSiteSecret($host, $scheme, $basicUser, $basicPass);
+    $result = bootstrapSiteSecret($targetUrl);
     echo json_encode($result);
     exit;
 }
-
 
 // --------------------------------------------------
 // AJAX: Step 1 サイト全体＆WP初期検証 ＋ サイトマップ解析
@@ -584,8 +561,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     header('Content-Type: application/json; charset=utf-8');
 
     $targetUrl = $_POST['url'] ?? '';
-    $basicUser = $_POST['basic_user'] ?? '';
-    $basicPass = $_POST['basic_pass'] ?? '';
     $siteSecret = $_POST['site_secret'] ?? '';
 
     if (empty($targetUrl)) {
@@ -602,28 +577,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     $scheme = $parsedUrl['scheme'] ?? 'https';
     $cleanHost = preg_replace('/^www\./', '', $host);
 
-    // サイト・サーバー基本設定の検証（チェックがある場合のみ）
     $siteResults = [];
     if (!empty($_POST['check_site_base'])) {
         $siteResults = [
-            checkSslRedirect($host, $parsedUrl['path'] ?? '/', $basicUser, $basicPass),
-            checkWwwRedirect($host, $scheme, $basicUser, $basicPass),
+            checkSslRedirect($host, $parsedUrl['path'] ?? '/'),
+            checkWwwRedirect($host, $scheme),
             checkDnsRecords($cleanHost),
         ];
 
-        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass, $siteSecret);
+        $wpApiData = checkWpApi($targetUrl, $cleanHost, $siteSecret);
         if (!empty($wpApiData['results']) && is_array($wpApiData['results'])) {
             $siteResults = array_merge($siteResults, $wpApiData['results']);
         }
     } else {
-        // APIからサイト名や管理画面URLだけは取得しておく
-        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass, $siteSecret);
+        $wpApiData = checkWpApi($targetUrl, $cleanHost, $siteSecret);
     }
 
     $siteName = $wpApiData['info']['site_name'] ?? '';
     if (empty($siteName)) {
         $chTitle = curl_init();
-        curl_setopt_array($chTitle, getCurlOptions($targetUrl, $basicUser, $basicPass));
+        curl_setopt_array($chTitle, getCurlOptions($targetUrl));
         $titleRes = curl_exec($chTitle);
         $titleHSize = curl_getinfo($chTitle, CURLINFO_HEADER_SIZE);
         curl_close($chTitle);
@@ -632,12 +605,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
         }
     }
 
-    // ページ巡回項目が1つでもチェックされている場合のみサイトマップを解析
     $hasPageCheck = !empty($_POST['check_noindex']) || !empty($_POST['check_demo']) || !empty($_POST['check_broken_link']) || !empty($_POST['check_ogp']) || !empty($_POST['check_recaptcha']);
 
     $scanUrls = [];
     if ($hasPageCheck) {
-        $scanUrls = fetchSitemapUrls($host, $scheme, $targetUrl, $basicUser, $basicPass);
+        $scanUrls = fetchSitemapUrls($host, $scheme, $targetUrl);
     }
 
     echo json_encode([
@@ -653,20 +625,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     exit;
 }
 
-
 // --------------------------------------------------
 // AJAX: Step 2 ページ単位の回遊検証
 // --------------------------------------------------
-
-// scan_page アクション部分（POSTオプションの引き渡し）
 if (isset($_GET['action']) && $_GET['action'] === 'scan_page') {
     if (ob_get_length()) ob_clean();
     header('Content-Type: application/json; charset=utf-8');
 
     $pageUrl = $_POST['page_url'] ?? '';
     $demoDomain = $_POST['demo_domain'] ?? '';
-    $basicUser = $_POST['basic_user'] ?? '';
-    $basicPass = $_POST['basic_pass'] ?? '';
 
     $options = [
         'check_noindex' => !empty($_POST['check_noindex']),
@@ -676,7 +643,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'scan_page') {
         'check_recaptcha' => !empty($_POST['check_recaptcha']),
     ];
 
-    $result = scanSinglePage($pageUrl, $demoDomain, $basicUser, $basicPass, $options);
+    $result = scanSinglePage($pageUrl, $demoDomain, $options);
     echo json_encode($result);
     exit;
 }

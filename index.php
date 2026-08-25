@@ -12,13 +12,34 @@ require_once __DIR__ . '/functions.php';
         <h1 class="text-2xl font-bold mb-6 text-slate-900">Web公開後 自動検証ツール</h1>
 
         <form id="checkerForm" class="bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-8">
+            <!-- 1. 検証対象URL -->
             <div class="mb-4">
                 <label class="block text-sm font-bold mb-2">検証対象URL *</label>
                 <input type="url" id="targetUrl" name="url" required placeholder="https://example.com" class="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500">
             </div>
 
-            <!-- ★追加: 検証項目の絞り込みチェックボックス -->
-            <div class="mb-4 p-4 bg-slate-50 rounded border border-slate-200">
+            <!-- 2. デモドメイン指定 & サイト固有シークレット -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium mb-1">デモドメイン指定（追加用）</label>
+                    <input type="text" id="demoDomain" name="demo_domain" placeholder="追加ドメインがあればカンマ区切りで入力" class="w-full p-2 border border-slate-300 rounded text-sm">
+                    <p class="text-xs text-slate-400 mt-1">※kbzdemo.xsrv.jp / demo.kurabiz.jp / demo2.kurabiz.jp は自動検知されます</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">サイト固有シークレット</label>
+                    <!-- 初期状態：自動取得ボタンのみ表示 -->
+                    <div id="secretBtnArea" class="pt-0.5">
+                        <button type="button" id="fetchSecretBtn" class="w-full bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded text-sm transition shadow-sm">シークレットを自動取得</button>
+                    </div>
+                    <!-- 取得後：テキストボックスのみ表示（初期非表示） -->
+                    <div id="secretInputArea" class="hidden">
+                        <input type="password" id="siteSecret" name="site_secret" readonly placeholder="取得済み" class="w-full p-2 border border-slate-300 rounded text-sm bg-slate-50 text-slate-600 font-mono">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. 【実施する検証項目を選択】（初期非表示：シークレット取得後に表示） -->
+            <div id="checkOptionsContainer" class="hidden mb-6 p-4 bg-slate-50 rounded border border-slate-200">
                 <label class="block text-xs font-bold text-slate-600 mb-2">【実施する検証項目を選択】</label>
                 <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
                     <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" name="check_site_base" value="1" checked class="rounded text-blue-600"> サイト・サーバー基本設定</label>
@@ -30,36 +51,12 @@ require_once __DIR__ . '/functions.php';
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                <div>
-                    <label class="block text-sm font-medium mb-1">デモドメイン（除外検知用）</label>
-                    <input type="text" id="demoDomain" name="demo_domain" placeholder="demo.stg-domain.com" class="w-full p-2 border border-slate-300 rounded text-sm">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium mb-1">BASIC認証 ID</label>
-                    <input type="text" id="basicUser" name="basic_user" class="w-full p-2 border border-slate-300 rounded text-sm">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium mb-1">BASIC認証 PW</label>
-                    <input type="password" id="basicPass" name="basic_pass" class="w-full p-2 border border-slate-300 rounded text-sm">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium mb-1">サイト固有シークレット</label>
-                    <div class="flex gap-1">
-                        <input type="password" id="siteSecret" name="site_secret" placeholder="下のボタンで自動取得できます" class="w-full p-2 border border-slate-300 rounded text-sm">
-                        <button type="button" id="fetchSecretBtn" class="shrink-0 bg-slate-600 hover:bg-slate-700 text-white text-xs font-bold px-3 rounded transition">自動取得</button>
-                    </div>
-                    <p class="text-xs text-slate-400 mt-1">check-api.phpをアップロード後、最初の1回だけ押してください（10分以内）</p>
-                </div>
-            </div>
-
+            <!-- 4. 操作ボタン（開始ボタン初期非表示） -->
             <div class="flex items-center gap-2">
-                <button type="submit" id="submitBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded transition">巡回検証を開始</button>
+                <button type="submit" id="submitBtn" class="hidden bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded transition">巡回検証を開始</button>
                 <button type="button" id="pauseBtn" class="hidden bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded transition text-sm">一時停止</button>
                 <button type="button" id="resumeBtn" class="hidden bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition text-sm">再開</button>
                 <button type="button" id="stopBtn" class="hidden bg-slate-500 hover:bg-slate-600 text-white font-bold py-2 px-4 rounded transition text-sm">ここで中止して集計</button>
-                
-                <!-- ★追加: NGページのみ再検証ボタン -->
                 <button type="button" id="reScanNgBtn" class="hidden bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition text-sm">NGのページのみ再検証</button>
             </div>
         </form>

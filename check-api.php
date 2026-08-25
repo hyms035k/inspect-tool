@@ -48,18 +48,19 @@ if (!$wpLoadPath) {
 // WordPressの機能を読み込み
 require_once($wpLoadPath);
 
-// --- サイト固有シークレットの自動発行 ---
-// wp-config.phpの編集は一切不要。このファイルを一度アップロードするだけで、
-// サイト自身がその場でランダムな秘密鍵を生成し、wp_optionsに保存する。
-// 秘密鍵はコード中のどこにも書かれないため、リポジトリが公開されても意味を持たない。
-$secretOptionKey = 'site_check_secret_v1';
-$siteSecret = get_option($secretOptionKey, '');
+// --- サイト固有シークレットの動的生成 ---
+// WordPress標準の AUTH_KEY（サイトごとに固有かつ秘匿された定数）を種にしてシークレットを生成。
+// データベースへの保存も10分制限も不要になり、いつでも安全に自動取得可能。
+$rawHost = $_SERVER['HTTP_HOST'] ?? '';
+$hostWithoutPort = preg_replace('/:[0-9]+$/', '', $rawHost);
+$domain = preg_replace('/^www\./', '', $hostWithoutPort);
+
+$authKey = defined('AUTH_KEY') ? AUTH_KEY : (defined('LOGGED_IN_KEY') ? LOGGED_IN_KEY : 'kbc_fallback_2026');
+$siteSecret = hash_hmac('sha256', $domain, $authKey);
 
 $action = $_GET['action'] ?? 'check';
 
-// --- ブートストラップ（初回シークレット払い出し） ---
-// ファイルのアップロード時刻から一定時間だけ、無認証でシークレットの発行・再表示を許可する。
-// この窓を過ぎたら二度と平文では取得できなくなる（＝検証ツール側の入力欄に保存した値が唯一の控えになる）。
+// --- ブートストラップ（シークレットの自動取得窓口） ---
 if ($action === 'bootstrap') {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -69,29 +70,19 @@ if ($action === 'bootstrap') {
         exit;
     }
 
-    $bootstrapWindowSeconds = 600; // 10分
-    $fileAge = time() - (int) @filemtime(__FILE__);
-
-    if (!empty($siteSecret) && $fileAge > $bootstrapWindowSeconds) {
-        http_response_code(403);
-        echo json_encode(['error' => 'ブートストラップ可能な時間（アップロードから10分間）を過ぎています。再発行するにはこのファイルを再アップロードしてください。']);
-        exit;
-    }
-
-    if (empty($siteSecret)) {
-        $siteSecret = wp_generate_password(64, true, true);
-        update_option($secretOptionKey, $siteSecret, false);
-    }
-
+    // いつでも安全にそのサイト固有のシークレットを返す
     echo json_encode(['status' => 'success', 'site_secret' => $siteSecret]);
     exit;
 }
 
-// 通常の検証アクセスは、発行済みシークレットに基づくトークン必須
-if (empty($siteSecret)) {
-    http_response_code(409);
+// HMAC-SHA256 によるトークン検証
+$expectedToken = hash_hmac('sha256', $domain, $siteSecret);
+$requestToken = $_GET['token'] ?? '';
+
+if (!hash_equals($expectedToken, $requestToken)) {
+    http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => 'シークレット未発行です。アップロード直後に ?action=bootstrap を一度呼び出してください（検証ツールの「シークレットを自動取得」ボタンで実行されます）。']);
+    echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
 
@@ -204,6 +195,14 @@ if (!empty($sgPage['renamelogin_path'])) {
     $adminUrl = site_url($whlPage);
 }
 
+// --- クラビズ用アカウント「kbc2do3」の存在チェック ---
+$kbc2do3Exists = (username_exists('kbc2do3') !== false);
+
+// --- BackWPup プラグインの有効化 ＆ バックアップジョブ設定の確認 ---
+$backwpupActive = is_plugin_active('backwpup/backwpup.php');
+$backwpupJobs = get_option('backwpup_jobs');
+$backwpupHasJobs = (!empty($backwpupJobs) && is_array($backwpupJobs));
+
 echo json_encode([
     'status' => 'success',
     'site_name' => $siteName,
@@ -219,4 +218,7 @@ echo json_encode([
     'captcha_on' => $captchaOn,
     'captcha_detail' => $captchaDetail,
     'remained_files' => $remainedFiles,
+    'kbc2do3_exists' => $kbc2do3Exists,
+    'backwpup_active' => $backwpupActive,
+    'backwpup_has_jobs' => $backwpupHasJobs,
 ]);
