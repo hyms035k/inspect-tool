@@ -5,6 +5,7 @@ ob_start();
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
+
 /**
  * cURL共通オプション取得
  */
@@ -25,6 +26,7 @@ function getCurlOptions(string $url, string $user = '', string $pass = ''): arra
     }
     return $opts;
 }
+
 
 /**
  * 1. SSLリダイレクトチェック
@@ -48,6 +50,7 @@ function checkSslRedirect(string $host, string $path, string $user = '', string 
     return ['title' => '正しくSSL通信できているか', 'status' => 'NG', 'detail' => 'httpアクセス時にhttpsへリダイレクトされていません（HTTP ' . ($info['http_code'] ?? '0') . '）。'];
 }
 
+
 /**
  * 2. wwwありなし正規化チェック
  */
@@ -68,6 +71,7 @@ function checkWwwRedirect(string $host, string $scheme, string $user = '', strin
     }
     return ['title' => 'ドメインのwwwありなし確認', 'status' => 'NG', 'detail' => "サブドメイン（{$altHost}）からの転送（301/302）が確認できません（HTTP " . ($altInfo['http_code'] ?? '0') . '）。'];
 }
+
 
 /**
  * 3. DNS設定（SPF / DMARC）チェック
@@ -98,6 +102,7 @@ function checkDnsRecords(string $cleanHost): array {
         'detail' => ($hasSpf ? 'SPF: OK' : 'SPF: 未検出') . ' / ' . ($hasDmarc ? 'DMARC: OK' : 'DMARC: 未検出')
     ];
 }
+
 
 /**
  * 4. check-api.php 連携 (WP内部詳細チェック)
@@ -190,6 +195,7 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
         'info' => $siteInfo
     ];
 }
+
 
 /**
  * 5. sitemap.xml の再帰解析と全ページURLの取得（多階層・AIOSEO対応）
@@ -308,6 +314,7 @@ function fetchSitemapUrls(string $host, string $scheme, string $targetUrl, strin
     $pageUrls = array_values(array_unique(array_filter($pageUrls)));
     return !empty($pageUrls) ? $pageUrls : [$targetUrl];
 }
+
 
 /**
  * 6. 単一ページの検証（チェックボックスによる高速化対応）
@@ -539,6 +546,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     ]);
     exit;
 }
+
 
 // --------------------------------------------------
 // AJAX: Step 2 ページ単位の回遊検証
