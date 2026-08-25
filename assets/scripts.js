@@ -34,7 +34,7 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             return;
         }
 
-        // ★追加: サイト概要情報の反映
+        // サイト概要情報の描画
         if (initData.site_info) {
             document.getElementById('infoSiteName').textContent = initData.site_info.site_name;
 
@@ -52,16 +52,18 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             document.getElementById('siteInfoContainer').classList.remove('hidden');
         }
 
-        // 共通結果の描画
-        initData.site_results.forEach(res => {
-            const tr = document.createElement('tr');
-            const badge = res.status === 'OK'
-                ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-0.5 rounded">OK</span>'
-                : '<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-0.5 rounded">NG</span>';
-            tr.innerHTML = `<td class="p-3 font-medium">${res.title}</td><td class="p-3">${badge}</td><td class="p-3 text-slate-600">${res.detail}</td>`;
-            siteResultBody.appendChild(tr);
-        });
-        siteResultContainer.classList.remove('hidden');
+        // 共通結果の描画（配列チェックを追加してエラー防止）
+        if (Array.isArray(initData.site_results)) {
+            initData.site_results.forEach(res => {
+                const tr = document.createElement('tr');
+                const badge = res.status === 'OK'
+                    ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-0.5 rounded">OK</span>'
+                    : '<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-0.5 rounded">NG</span>';
+                tr.innerHTML = `<td class="p-3 font-medium">${res.title}</td><td class="p-3">${badge}</td><td class="p-3 text-slate-600">${res.detail}</td>`;
+                siteResultBody.appendChild(tr);
+            });
+            siteResultContainer.classList.remove('hidden');
+        }
 
         // Step 2: ページごとの回遊ループ実行
         const scanUrls = initData.scan_urls;
