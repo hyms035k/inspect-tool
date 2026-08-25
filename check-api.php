@@ -48,21 +48,66 @@ if (!$wpLoadPath) {
 // WordPressの機能を読み込み
 require_once($wpLoadPath);
 
-// 社内共通キー（index.php と同じ値を設定）
-$secretKey = 'kbc_secret_2026';
+// --- サイト固有シークレットの自動発行 ---
+// wp-config.phpの編集は一切不要。このファイルを一度アップロードするだけで、
+// サイト自身がその場でランダムな秘密鍵を生成し、wp_optionsに保存する。
+// 秘密鍵はコード中のどこにも書かれないため、リポジトリが公開されても意味を持たない。
+$secretOptionKey = 'site_check_secret_v1';
+$siteSecret = get_option($secretOptionKey, '');
+
+$action = $_GET['action'] ?? 'check';
+
+// --- ブートストラップ（初回シークレット払い出し） ---
+// ファイルのアップロード時刻から一定時間だけ、無認証でシークレットの発行・再表示を許可する。
+// この窓を過ぎたら二度と平文では取得できなくなる（＝検証ツール側の入力欄に保存した値が唯一の控えになる）。
+if ($action === 'bootstrap') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'bootstrap must be requested via POST']);
+        exit;
+    }
+
+    $bootstrapWindowSeconds = 600; // 10分
+    $fileAge = time() - (int) @filemtime(__FILE__);
+
+    if (!empty($siteSecret) && $fileAge > $bootstrapWindowSeconds) {
+        http_response_code(403);
+        echo json_encode(['error' => 'ブートストラップ可能な時間（アップロードから10分間）を過ぎています。再発行するにはこのファイルを再アップロードしてください。']);
+        exit;
+    }
+
+    if (empty($siteSecret)) {
+        $siteSecret = wp_generate_password(64, true, true);
+        update_option($secretOptionKey, $siteSecret, false);
+    }
+
+    echo json_encode(['status' => 'success', 'site_secret' => $siteSecret]);
+    exit;
+}
+
+// 通常の検証アクセスは、発行済みシークレットに基づくトークン必須
+if (empty($siteSecret)) {
+    http_response_code(409);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => 'シークレット未発行です。アップロード直後に ?action=bootstrap を一度呼び出してください（検証ツールの「シークレットを自動取得」ボタンで実行されます）。']);
+    exit;
+}
 
 // HTTP_HOSTからポート番号と www. を除去してドメイン名を統一
 $rawHost = $_SERVER['HTTP_HOST'] ?? '';
 $hostWithoutPort = preg_replace('/:[0-9]+$/', '', $rawHost);
 $domain = preg_replace('/^www\./', '', $hostWithoutPort);
 
-// 自ドメイン名からトークンを自動生成
-$expectedToken = md5($domain . $secretKey);
+// 自ドメイン名からトークンを自動生成（HMAC-SHA256。発行済みシークレットで検証）
+$expectedToken = hash_hmac('sha256', $domain, $siteSecret);
 
 // トークン検証
 $requestToken = $_GET['token'] ?? '';
 if (!hash_equals($expectedToken, $requestToken)) {
     http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
@@ -135,10 +180,14 @@ $unnecessaryFiles = ['license.txt', 'readme.html', 'wp-config-sample.php'];
 $remainedFiles = [];
 
 $truePath = __DIR__ . (!empty($wpSubDir) ? '/' . $wpSubDir : '');
+// 「検証」は状態を変更すべきではないため、削除は自動実行しない。
+// ?cleanup=1 を明示的に付けてリクエストされた場合のみ削除する（別ボタン等で意識的に呼び出す想定）。
+$doCleanup = ($_GET['cleanup'] ?? '') === '1';
 foreach ($unnecessaryFiles as $file) {
-    // ABSPATH（WPルート）または check-api.php と同じ階層にあるか確認
     if (file_exists($truePath . '/' . $file)) {
-        @unlink($truePath . '/' . $file);
+        if ($doCleanup) {
+            @unlink($truePath . '/' . $file);
+        }
     }
     if (file_exists($truePath . '/' . $file)) {
         $remainedFiles[] = $file;

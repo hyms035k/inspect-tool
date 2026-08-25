@@ -40,14 +40,45 @@ function checkSslRedirect(string $host, string $path, string $user = '', string 
     $info = curl_getinfo($ch);
     curl_close($ch);
 
+    $redirectOk = false;
+    $redirectDetail = 'httpアクセス時にhttpsへリダイレクトされていません（HTTP ' . ($info['http_code'] ?? '0') . '）。';
     if ($response !== false && in_array($info['http_code'], [301, 302, 307, 308])) {
         preg_match('/Location:\s*(https:\/\/[^\r\n]+)/i', $response, $matches);
         if (!empty($matches[1])) {
-            return ['title' => '正しくSSL通信できているか', 'status' => 'OK', 'detail' => 'httpアクセス時にhttpsへ正常リダイレクトされています。'];
+            $redirectOk = true;
+            $redirectDetail = 'httpアクセス時にhttpsへ正常リダイレクトされています。';
+        } else {
+            $redirectDetail = 'リダイレクト先がhttpsではありません。';
         }
-        return ['title' => '正しくSSL通信できているか', 'status' => 'NG', 'detail' => 'リダイレクト先がhttpsではありません。'];
     }
-    return ['title' => '正しくSSL通信できているか', 'status' => 'NG', 'detail' => 'httpアクセス時にhttpsへリダイレクトされていません（HTTP ' . ($info['http_code'] ?? '0') . '）。'];
+
+    // リダイレクトの有無だけでなく、証明書自体が有効かも別途検証する
+    // （getCurlOptions は CURLOPT_SSL_VERIFYPEER=false のため、ここだけ上書きして厳密に検証する）
+    $certOk = false;
+    $certDetail = '証明書を検証できませんでした。';
+    $chCert = curl_init();
+    curl_setopt_array($chCert, getCurlOptions('https://' . $host . ($path ?: '/'), $user, $pass));
+    curl_setopt($chCert, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($chCert, CURLOPT_SSL_VERIFYHOST, 2);
+    curl_setopt($chCert, CURLOPT_NOBODY, true);
+    $certRes = curl_exec($chCert);
+    $certErrno = curl_errno($chCert);
+    $certErrmsg = curl_error($chCert);
+    curl_close($chCert);
+
+    if ($certRes !== false && $certErrno === 0) {
+        $certOk = true;
+        $certDetail = '証明書は有効です（ホスト名・有効期限を含め検証OK）。';
+    } else {
+        $certDetail = '証明書エラー: ' . $certErrmsg;
+    }
+
+    $status = ($redirectOk && $certOk) ? 'OK' : 'NG';
+    return [
+        'title' => '正しくSSL通信できているか',
+        'status' => $status,
+        'detail' => $redirectDetail . ' / ' . $certDetail
+    ];
 }
 
 
@@ -105,11 +136,50 @@ function checkDnsRecords(string $cleanHost): array {
 
 
 /**
+ * 4-0. check-api.php のブートストラップ呼び出し（初回シークレット自動取得）
+ */
+function bootstrapSiteSecret(string $host, string $scheme, string $user = '', string $pass = ''): array {
+    $url = $scheme . '://' . $host . '/check-api.php?action=bootstrap';
+
+    $ch = curl_init();
+    curl_setopt_array($ch, getCurlOptions($url, $user, $pass));
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, '');
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    curl_close($ch);
+
+    if ($response !== false && $httpCode === 200) {
+        $data = json_decode(substr($response, $headerSize), true);
+        if (is_array($data) && ($data['status'] ?? '') === 'success' && !empty($data['site_secret'])) {
+            return ['status' => 'success', 'site_secret' => $data['site_secret']];
+        }
+        if (is_array($data) && !empty($data['error'])) {
+            return ['status' => 'error', 'message' => $data['error']];
+        }
+    }
+    return ['status' => 'error', 'message' => 'check-api.php からシークレットを取得できませんでした（未配置、アップロードから10分以上経過、等の可能性があります）。'];
+}
+
+
+/**
  * 4. check-api.php 連携 (WP内部詳細チェック)
  */
-function checkWpApi(string $host, string $scheme, string $cleanHost, string $user = '', string $pass = ''): array {
-    $secretKey = 'kbc_secret_2026';
-    $calcToken = md5($cleanHost . $secretKey);
+function checkWpApi(string $host, string $scheme, string $cleanHost, string $user = '', string $pass = '', string $siteSecret = ''): array {
+    // $siteSecret は対象サイトの wp-config.php に define('SITE_CHECK_SECRET', '...') した値と
+    // 同じものをフォームから入力してもらう。空の場合はAPI連携をスキップする。
+    if (empty($siteSecret)) {
+        return [
+            'results' => [[
+                'title' => 'WP内部詳細検証',
+                'status' => 'NG',
+                'detail' => '「サイト固有シークレット」が未入力のためスキップされました。フォームの「自動取得」ボタンを押してください。'
+            ]],
+            'info' => ['site_name' => '', 'admin_url' => '-']
+        ];
+    }
+    $calcToken = hash_hmac('sha256', $cleanHost, $siteSecret);
     $apiUrl = $scheme . '://' . $host . '/check-api.php?token=' . $calcToken;
 
     $chApi = curl_init();
@@ -383,7 +453,10 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
     // C. 内部リンク切れ (404エラー)
     if ($chkBroken && !empty($internalLinks)) {
-        $uniqueLinks = array_slice(array_unique($internalLinks), 0, 10);
+        // 以前は array_slice(..., 0, 10) で先頭10件のみ検査しており、
+        // 11件目以降にリンク切れがあっても「OK」と表示されてしまっていた。
+        // 全件検査する（ページ数・リンク数が非常に多いサイトでは検証時間が伸びる点に留意）。
+        $uniqueLinks = array_unique($internalLinks);
         foreach ($uniqueLinks as $link) {
             $chLink = curl_init();
             curl_setopt_array($chLink, getCurlOptions($link, $user, $pass));
@@ -428,7 +501,11 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
         }
     }
 
-    if ($chkRecaptcha && $isContactFormPresent) {
+    // reCAPTCHA自体を読み込んでいないサイトまで「バッジ非表示CSSがない」でNGにしないよう、
+    // 先に reCAPTCHA スクリプト/API の使用有無を確認する。
+    $usesRecaptcha = (bool) preg_match('/(www\.google\.com\/recaptcha|grecaptcha|www\.gstatic\.com\/recaptcha)/i', $html);
+
+    if ($chkRecaptcha && $isContactFormPresent && $usesRecaptcha) {
         $allCssText = '';
         $styles = $xpath->query('//style');
         foreach ($styles as $s) { $allCssText .= $s->nodeValue . "\n"; }
@@ -472,6 +549,34 @@ function scanSinglePage(string $pageUrl, string $demoDomain, string $user = '', 
 
 
 // --------------------------------------------------
+// AJAX: シークレット自動取得（check-api.phpのブートストラップを中継）
+// --------------------------------------------------
+if (isset($_GET['action']) && $_GET['action'] === 'bootstrap_secret') {
+    if (ob_get_length()) ob_clean();
+    header('Content-Type: application/json; charset=utf-8');
+
+    $targetUrl = $_POST['url'] ?? '';
+    $basicUser = $_POST['basic_user'] ?? '';
+    $basicPass = $_POST['basic_pass'] ?? '';
+
+    if (empty($targetUrl)) {
+        echo json_encode(['status' => 'error', 'message' => 'URLを入力してください']);
+        exit;
+    }
+    if (!preg_match('/^https?:\/\//', $targetUrl)) {
+        $targetUrl = 'https://' . $targetUrl;
+    }
+    $parsedUrl = parse_url($targetUrl);
+    $host = $parsedUrl['host'] ?? '';
+    $scheme = $parsedUrl['scheme'] ?? 'https';
+
+    $result = bootstrapSiteSecret($host, $scheme, $basicUser, $basicPass);
+    echo json_encode($result);
+    exit;
+}
+
+
+// --------------------------------------------------
 // AJAX: Step 1 サイト全体＆WP初期検証 ＋ サイトマップ解析
 // --------------------------------------------------
 if (isset($_GET['action']) && $_GET['action'] === 'init') {
@@ -481,6 +586,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     $targetUrl = $_POST['url'] ?? '';
     $basicUser = $_POST['basic_user'] ?? '';
     $basicPass = $_POST['basic_pass'] ?? '';
+    $siteSecret = $_POST['site_secret'] ?? '';
 
     if (empty($targetUrl)) {
         echo json_encode(['status' => 'error', 'message' => 'URLを入力してください']);
@@ -505,13 +611,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
             checkDnsRecords($cleanHost),
         ];
 
-        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
+        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass, $siteSecret);
         if (!empty($wpApiData['results']) && is_array($wpApiData['results'])) {
             $siteResults = array_merge($siteResults, $wpApiData['results']);
         }
     } else {
         // APIからサイト名や管理画面URLだけは取得しておく
-        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
+        $wpApiData = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass, $siteSecret);
     }
 
     $siteName = $wpApiData['info']['site_name'] ?? '';

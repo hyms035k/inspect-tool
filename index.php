@@ -30,7 +30,7 @@ require_once __DIR__ . '/functions.php';
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                 <div>
                     <label class="block text-sm font-medium mb-1">デモドメイン（除外検知用）</label>
                     <input type="text" id="demoDomain" name="demo_domain" placeholder="demo.stg-domain.com" class="w-full p-2 border border-slate-300 rounded text-sm">
@@ -43,6 +43,14 @@ require_once __DIR__ . '/functions.php';
                     <label class="block text-sm font-medium mb-1">BASIC認証 PW</label>
                     <input type="password" id="basicPass" name="basic_pass" class="w-full p-2 border border-slate-300 rounded text-sm">
                 </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">サイト固有シークレット</label>
+                    <div class="flex gap-1">
+                        <input type="password" id="siteSecret" name="site_secret" placeholder="下のボタンで自動取得できます" class="w-full p-2 border border-slate-300 rounded text-sm">
+                        <button type="button" id="fetchSecretBtn" class="shrink-0 bg-slate-600 hover:bg-slate-700 text-white text-xs font-bold px-3 rounded transition">自動取得</button>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-1">check-api.phpをアップロード後、最初の1回だけ押してください（10分以内）</p>
+                </div>
             </div>
 
             <div class="flex items-center gap-2">
@@ -50,7 +58,7 @@ require_once __DIR__ . '/functions.php';
                 <button type="button" id="pauseBtn" class="hidden bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded transition text-sm">一時停止</button>
                 <button type="button" id="resumeBtn" class="hidden bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition text-sm">再開</button>
                 <button type="button" id="stopBtn" class="hidden bg-slate-500 hover:bg-slate-600 text-white font-bold py-2 px-4 rounded transition text-sm">ここで中止して集計</button>
-
+                
                 <!-- ★追加: NGページのみ再検証ボタン -->
                 <button type="button" id="reScanNgBtn" class="hidden bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition text-sm">NGのページのみ再検証</button>
             </div>

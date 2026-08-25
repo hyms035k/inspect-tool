@@ -1,5 +1,17 @@
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// 検証対象サイトから取得した文字列（URL、ページタイトル、検出メッセージ等）は
+// 信頼できない入力として扱い、innerHTMLに挿入する前に必ずエスケープする。
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 let isPaused = false;
 let isAborted = false;
 let scannedResultsMap = new Map();
@@ -57,7 +69,7 @@ function updateSummaryTable() {
 
             detailHtml = isOk
                 ? `<span class="text-slate-600">${item.okMsg}</span>`
-                : `<div class="text-red-600 font-semibold mb-1">${item.ngMsg}（${item.list.length} ページ）:</div><ul class="list-disc list-inside text-xs space-y-0.5 text-slate-700">${item.list.map(i => `<li><a href="${i.url}" target="_blank" class="text-blue-600 hover:underline font-mono">${i.url}</a></li>`).join('')}</ul>`;
+                : `<div class="text-red-600 font-semibold mb-1">${item.ngMsg}（${item.list.length} ページ）:</div><ul class="list-disc list-inside text-xs space-y-0.5 text-slate-700">${item.list.map(i => `<li><a href="${escapeHtml(i.url)}" target="_blank" class="text-blue-600 hover:underline font-mono">${escapeHtml(i.url)}</a></li>`).join('')}</ul>`;
         }
 
         const tr = document.createElement('tr');
@@ -93,7 +105,7 @@ async function rescanSinglePage(url, rowElem) {
             : '<span class="text-xs text-slate-400">なし</span>';
 
         const issueList = (pageResult.issues && pageResult.issues.length > 0)
-            ? `<ul class="list-disc list-inside text-red-600 space-y-0.5">${pageResult.issues.map(iss => `<li>${iss}</li>`).join('')}</ul>`
+            ? `<ul class="list-disc list-inside text-red-600 space-y-0.5">${pageResult.issues.map(iss => `<li>${escapeHtml(iss)}</li>`).join('')}</ul>`
             : '<span class="text-slate-400">不備なし</span>';
 
         rowElem.children[1].innerHTML = formBadge;
@@ -109,6 +121,41 @@ async function rescanSinglePage(url, rowElem) {
         btn.textContent = '再検証';
     }
 }
+
+// シークレット自動取得ボタン
+document.getElementById('fetchSecretBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('fetchSecretBtn');
+    const targetUrl = document.getElementById('targetUrl').value;
+    if (!targetUrl) {
+        alert('先に検証対象URLを入力してください');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('url', targetUrl);
+    formData.append('basic_user', document.getElementById('basicUser').value);
+    formData.append('basic_pass', document.getElementById('basicPass').value);
+
+    btn.disabled = true;
+    btn.textContent = '取得中...';
+
+    try {
+        const res = await fetch('index.php?action=bootstrap_secret', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (data.status === 'success' && data.site_secret) {
+            document.getElementById('siteSecret').value = data.site_secret;
+            alert('シークレットを取得しました。このまま検証を実行できます。');
+        } else {
+            alert('取得失敗: ' + (data.message || '不明なエラー'));
+        }
+    } catch (err) {
+        alert('通信エラー: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '自動取得';
+    }
+});
 
 // ボタンイベント設定
 document.getElementById('pauseBtn').addEventListener('click', () => {
@@ -222,7 +269,7 @@ document.getElementById('checkerForm').addEventListener('submit', async function
 
             const adminUrlElem = document.getElementById('infoAdminUrl');
             if (initData.site_info.admin_url && initData.site_info.admin_url !== '-') {
-                adminUrlElem.innerHTML = `<a href="${initData.site_info.admin_url}" target="_blank" class="text-blue-600 hover:underline">${initData.site_info.admin_url}</a>`;
+                adminUrlElem.innerHTML = `<a href="${escapeHtml(initData.site_info.admin_url)}" target="_blank" class="text-blue-600 hover:underline">${escapeHtml(initData.site_info.admin_url)}</a>`;
             } else {
                 adminUrlElem.textContent = '未検出（非WPまたはAPI未連携）';
             }
@@ -236,7 +283,7 @@ document.getElementById('checkerForm').addEventListener('submit', async function
                 const badge = res.status === 'OK'
                     ? '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-0.5 rounded">OK</span>'
                     : '<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-0.5 rounded">NG</span>';
-                tr.innerHTML = `<td class="p-3 font-medium">${res.title}</td><td class="p-3">${badge}</td><td class="p-3 text-slate-600">${res.detail}</td>`;
+                tr.innerHTML = `<td class="p-3 font-medium">${escapeHtml(res.title)}</td><td class="p-3">${badge}</td><td class="p-3 text-slate-600">${escapeHtml(res.detail)}</td>`;
                 siteResultBody.appendChild(tr);
             });
             siteResultContainer.classList.remove('hidden');
@@ -286,14 +333,14 @@ document.getElementById('checkerForm').addEventListener('submit', async function
                     : '<span class="text-xs text-slate-400">なし</span>';
 
                 const issueList = (pageResult.issues && pageResult.issues.length > 0)
-                    ? `<ul class="list-disc list-inside text-red-600 space-y-0.5">${pageResult.issues.map(iss => `<li>${iss}</li>`).join('')}</ul>`
+                    ? `<ul class="list-disc list-inside text-red-600 space-y-0.5">${pageResult.issues.map(iss => `<li>${escapeHtml(iss)}</li>`).join('')}</ul>`
                     : '<span class="text-slate-400">不備なし</span>';
 
                 const trRealtime = document.createElement('tr');
                 trRealtime.dataset.url = url;
                 trRealtime.dataset.status = pageResult.status;
                 trRealtime.innerHTML = `
-                    <td class="p-2 font-mono break-all"><a href="${pageResult.url}" target="_blank" class="text-blue-600 hover:underline">${pageResult.url}</a></td>
+                    <td class="p-2 font-mono break-all"><a href="${escapeHtml(pageResult.url)}" target="_blank" class="text-blue-600 hover:underline">${escapeHtml(pageResult.url)}</a></td>
                     <td class="p-2">${formBadge}</td>
                     <td class="p-2">${badge}</td>
                     <td class="p-2">${issueList}</td>
