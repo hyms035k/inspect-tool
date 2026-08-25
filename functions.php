@@ -125,7 +125,20 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
 
         if (is_array($apiData) && isset($apiData['status']) && $apiData['status'] === 'success') {
             $siteInfo['site_name'] = $apiData['site_name'] ?? '';
-            $siteInfo['admin_url'] = $apiData['admin_url'] ?? '-';
+
+            if($apiData['admin_url']){
+                $ch = curl_init();
+                curl_setopt_array($ch, getCurlOptions($apiData['admin_url'], $user, $pass));
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+                curl_exec($ch);
+                $altInfo = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                if (in_array($altInfo, [403, 404])) {
+                    $siteInfo['admin_url'] .= '.php';
+                }
+            }else{
+                $siteInfo['admin_url'] = '-';
+            }
 
             $wpSubDir = !empty($apiData['wp_subdir']) ? '/' . trim($apiData['wp_subdir'], '/') : '';
             $wpLoginUrl = $scheme . '://' . $host . $wpSubDir . '/wp-login.php';
