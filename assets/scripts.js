@@ -34,6 +34,24 @@ document.getElementById('checkerForm').addEventListener('submit', async function
             return;
         }
 
+        // ★追加: サイト概要情報の反映
+        if (initData.site_info) {
+            document.getElementById('infoSiteName').textContent = initData.site_info.site_name;
+
+            const siteUrlElem = document.getElementById('infoSiteUrl');
+            siteUrlElem.href = initData.site_info.site_url;
+            siteUrlElem.textContent = initData.site_info.site_url;
+
+            const adminUrlElem = document.getElementById('infoAdminUrl');
+            if (initData.site_info.admin_url && initData.site_info.admin_url !== '-') {
+                adminUrlElem.innerHTML = `<a href="${initData.site_info.admin_url}" target="_blank" class="text-blue-600 hover:underline">${initData.site_info.admin_url}</a>`;
+            } else {
+                adminUrlElem.textContent = '未検出（非WPまたはAPI未連携）';
+            }
+
+            document.getElementById('siteInfoContainer').classList.remove('hidden');
+        }
+
         // 共通結果の描画
         initData.site_results.forEach(res => {
             const tr = document.createElement('tr');

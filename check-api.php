@@ -145,8 +145,20 @@ foreach ($unnecessaryFiles as $file) {
     }
 }
 
+// サイト名・管理画面URLの取得
+$siteName = get_bloginfo('name');
+$adminUrl = site_url('wp-login.php');
+
+if (!empty($sgPage['renamelogin_path'])) {
+    $adminUrl = site_url($sgPage['renamelogin_path']);
+} elseif (!empty($whlPage)) {
+    $adminUrl = site_url($whlPage);
+}
+
 echo json_encode([
     'status' => 'success',
+    'site_name' => $siteName,
+    'admin_url' => $adminUrl,
     'wp_subdir' => $wpSubDir, // 検出したサブディレクトリ名（ルートの場合は空文字）
     'wp_version' => get_bloginfo('version'),
     'wp_is_latest' => $wpLatest,

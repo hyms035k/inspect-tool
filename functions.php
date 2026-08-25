@@ -40,11 +40,29 @@ if (isset($_GET['action']) && $_GET['action'] === 'init') {
     $wpApiResults = checkWpApi($host, $scheme, $cleanHost, $basicUser, $basicPass);
     $siteResults = array_merge($siteResults, $wpApiResults);
 
+    // APIでサイト名が取れなかった場合のフォールバック（HTMLの<title>を取得）
+    $siteName = $wpApiData['info']['site_name'];
+    if (empty($siteName)) {
+        $chTitle = curl_init();
+        curl_setopt_array($chTitle, getCurlOptions($targetUrl, $basicUser, $basicPass));
+        $titleRes = curl_exec($chTitle);
+        $titleHSize = curl_getinfo($chTitle, CURLINFO_HEADER_SIZE);
+        curl_close($chTitle);
+        if (preg_match('/<title[^>]*>(.*?)<\/title>/is', substr($titleRes, $titleHSize), $m)) {
+            $siteName = trim($m[1]);
+        }
+    }
+
     // サイトマップ取得
     $scanUrls = fetchSitemapUrls($host, $scheme, $targetUrl, $basicUser, $basicPass);
 
     echo json_encode([
         'status' => 'success',
+        'site_info' => [
+            'site_name' => $siteName ?: '（名称未検出）',
+            'site_url' => $targetUrl,
+            'admin_url' => $wpApiData['info']['admin_url']
+        ],
         'site_results' => $siteResults,
         'scan_urls' => $scanUrls
     ]);
@@ -180,10 +198,19 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
     curl_close($chApi);
 
     $results = [];
+    $siteInfo = [
+        'site_name' => '',
+        'admin_url' => '-'
+    ];
 
     if ($apiHttpCode === 200 && !empty($apiResponse)) {
         $apiData = json_decode(substr($apiResponse, $apiHeaderSize), true);
         if (isset($apiData['status']) && $apiData['status'] === 'success') {
+
+            // ★サイト概要情報のセット
+            $siteInfo['site_name'] = $apiData['site_name'] ?? '';
+            $siteInfo['admin_url'] = $apiData['admin_url'] ?? '-';
+
             $wpSubDir = !empty($apiData['wp_subdir']) ? '/' . trim($apiData['wp_subdir'], '/') : '';
             $wpLoginUrl = $scheme . '://' . $host . $wpSubDir . '/wp-login.php';
 
@@ -212,7 +239,10 @@ function checkWpApi(string $host, string $scheme, string $cleanHost, string $use
         $results[] = ['title' => 'WP内部詳細検証 (API未検出)', 'status' => 'NG', 'detail' => 'check-api.php が未配置、またはトークンエラーです。'];
     }
 
-    return $results;
+    return [
+        'results' => $results,
+        'info' => $siteInfo
+    ];
 }
 
 

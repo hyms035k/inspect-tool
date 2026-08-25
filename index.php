@@ -46,6 +46,32 @@ require_once __DIR__ . '/functions.php';
             </div>
         </div>
 
+        <!-- 対象サイト情報テーブル -->
+        <div id="siteInfoContainer" class="hidden bg-white p-6 rounded-lg shadow-sm border border-slate-200 mb-8">
+            <h2 class="text-sm font-bold mb-3 text-slate-700 flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                検証対象サイト概要
+            </h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse border border-slate-200 text-sm">
+                    <tbody>
+                        <tr class="border-b border-slate-200">
+                            <th class="p-3 bg-slate-50 font-semibold w-1/4 text-slate-600 border-r border-slate-200">サイト名</th>
+                            <td id="infoSiteName" class="p-3 font-bold text-slate-900">-</td>
+                        </tr>
+                        <tr class="border-b border-slate-200">
+                            <th class="p-3 bg-slate-50 font-semibold w-1/4 text-slate-600 border-r border-slate-200">URL</th>
+                            <td class="p-3"><a id="infoSiteUrl" href="#" target="_blank" class="text-blue-600 hover:underline font-mono">-</a></td>
+                        </tr>
+                        <tr>
+                            <th class="p-3 bg-slate-50 font-semibold w-1/4 text-slate-600 border-r border-slate-200">管理ページURL</th>
+                            <td id="infoAdminUrl" class="p-3 font-mono text-slate-800">-</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- 1. サイト全体・WP共通検証結果 -->
         <div id="siteResultContainer" class="hidden mb-8">
             <h2 class="text-lg font-bold mb-3 text-slate-800">1. サイト・サーバー基本設定</h2>
