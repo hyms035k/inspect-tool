@@ -50,7 +50,7 @@ require_once __DIR__ . '/functions.php';
                 <button type="button" id="pauseBtn" class="hidden bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded transition text-sm">一時停止</button>
                 <button type="button" id="resumeBtn" class="hidden bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition text-sm">再開</button>
                 <button type="button" id="stopBtn" class="hidden bg-slate-500 hover:bg-slate-600 text-white font-bold py-2 px-4 rounded transition text-sm">ここで中止して集計</button>
-                
+
                 <!-- ★追加: NGページのみ再検証ボタン -->
                 <button type="button" id="reScanNgBtn" class="hidden bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition text-sm">NGのページのみ再検証</button>
             </div>
